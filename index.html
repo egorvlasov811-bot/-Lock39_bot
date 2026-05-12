@@ -1,0 +1,664 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Камера хранения</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<style>
+:root {
+  --bg: var(--tg-theme-bg-color, #ffffff);
+  --text: var(--tg-theme-text-color, #111111);
+  --hint: var(--tg-theme-hint-color, #888888);
+  --btn: var(--tg-theme-button-color, #2678b6);
+  --btn-text: var(--tg-theme-button-text-color, #ffffff);
+  --secondary: var(--tg-theme-secondary-bg-color, #f4f4f5);
+  --accent: #2678b6;
+  --accent-light: rgba(38,120,182,0.10);
+  --success-bg: #dcfce7;
+  --danger: #ef4444;
+  --danger-bg: #fee2e2;
+  --r: 14px;
+  --rs: 10px;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  max-width: 430px;
+  margin: 0 auto;
+  padding-bottom: 88px;
+  overflow-x: hidden;
+}
+
+/* HEADER */
+.header {
+  display: flex; align-items: center; gap: 12px;
+  padding: 14px 16px 12px;
+  border-bottom: 1px solid rgba(128,128,128,0.12);
+  position: sticky; top: 0; background: var(--bg); z-index: 20;
+}
+.hicon {
+  width: 40px; height: 40px; border-radius: 11px;
+  background: var(--accent-light);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 20px; flex-shrink: 0;
+}
+.htitle { font-size: 16px; font-weight: 700; }
+.hsub { font-size: 12px; color: var(--hint); margin-top: 1px; }
+.back-btn {
+  margin-left: auto; padding: 6px 14px;
+  border: none; background: var(--secondary);
+  border-radius: 20px; font-size: 13px; color: var(--accent);
+  cursor: pointer; font-weight: 500;
+}
+
+/* SCREENS */
+.screen { display: none; }
+.screen.active { display: block; animation: fadeUp .22s ease; }
+@keyframes fadeUp { from { opacity:0; transform:translateY(7px); } to { opacity:1; transform:translateY(0); } }
+
+.section { padding: 14px 16px; }
+.slabel {
+  font-size: 11px; font-weight: 700; color: var(--hint);
+  text-transform: uppercase; letter-spacing: .6px; margin-bottom: 10px;
+}
+
+/* TARIFF CARDS */
+.tariff-list { display: flex; flex-direction: column; gap: 8px; }
+.tcard {
+  border: 1.5px solid rgba(128,128,128,0.15);
+  border-radius: var(--r); padding: 13px 14px;
+  cursor: pointer; transition: all .18s;
+  display: flex; align-items: center; gap: 12px;
+  background: var(--bg); position: relative;
+  user-select: none;
+}
+.tcard.sel { border-color: var(--accent); background: var(--accent-light); }
+.ticon {
+  width: 40px; height: 40px; border-radius: 10px;
+  background: var(--secondary);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 20px; flex-shrink: 0; transition: background .18s;
+}
+.tcard.sel .ticon { background: rgba(38,120,182,0.15); }
+.tinfo { flex: 1; min-width: 0; }
+.tname { font-size: 15px; font-weight: 600; }
+.tdesc { font-size: 12px; color: var(--hint); margin-top: 2px; }
+.tprice { font-size: 15px; font-weight: 700; color: var(--accent); white-space: nowrap; flex-shrink: 0; }
+.tbadge {
+  position: absolute; top: 7px; right: 7px;
+  font-size: 10px; font-weight: 600; padding: 2px 8px;
+  border-radius: 20px; background: #fef3c7; color: #92400e;
+}
+.tcheck {
+  position: absolute; bottom: 8px; right: 8px;
+  width: 18px; height: 18px; border-radius: 50%;
+  background: var(--accent); color: white;
+  font-size: 11px; display: none;
+  align-items: center; justify-content: center;
+  font-weight: 700;
+}
+.tcard.sel .tcheck { display: flex; }
+
+/* SUB-PICKER */
+.sub-picker {
+  display: none; margin-top: 10px;
+  background: var(--secondary); border-radius: var(--rs); padding: 12px 14px;
+}
+.sub-picker.vis { display: block; }
+.sub-label { font-size: 13px; color: var(--hint); margin-bottom: 8px; }
+.counter {
+  display: flex; align-items: center;
+  border: 1.5px solid rgba(128,128,128,0.18);
+  border-radius: 10px; overflow: hidden; width: fit-content;
+}
+.cbtn {
+  width: 42px; height: 42px; border: none; background: var(--bg);
+  font-size: 22px; cursor: pointer; color: var(--accent);
+  display: flex; align-items: center; justify-content: center;
+  transition: background .12s;
+}
+.cbtn:active { background: var(--accent-light); }
+.cval {
+  min-width: 52px; text-align: center;
+  font-size: 17px; font-weight: 600;
+  border-left: 1px solid rgba(128,128,128,0.15);
+  border-right: 1px solid rgba(128,128,128,0.15);
+  padding: 8px 4px;
+}
+
+/* CELLS */
+.cells-meta {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 16px 6px;
+}
+.legend { display: flex; gap: 10px; flex-wrap: wrap; }
+.leg {
+  display: flex; align-items: center; gap: 4px;
+  font-size: 11px; color: var(--hint);
+}
+.ldot { width: 11px; height: 11px; border-radius: 3px; }
+.cells-grid {
+  display: grid;
+  grid-template-columns: repeat(10, 1fr);
+  gap: 4px;
+  padding: 0 16px 4px;
+}
+.cell {
+  aspect-ratio: 1;
+  border-radius: 5px;
+  border: 1.5px solid rgba(128,128,128,0.14);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 9px; font-weight: 700;
+  cursor: pointer; transition: all .14s;
+  background: var(--bg); color: var(--text);
+}
+.cell:active { transform: scale(.92); }
+.cell.busy {
+  background: var(--danger-bg);
+  border-color: rgba(239,68,68,0.28);
+  color: var(--danger); cursor: not-allowed;
+}
+.cell.sel {
+  background: var(--accent); border-color: var(--accent);
+  color: white; transform: scale(1.10);
+  box-shadow: 0 3px 10px rgba(38,120,182,.35);
+}
+.cell-chosen {
+  display: none; align-items: center; justify-content: space-between;
+  background: var(--accent-light);
+  border: 1px solid rgba(38,120,182,0.22);
+  border-radius: var(--rs); padding: 10px 14px;
+  margin: 8px 16px 4px; font-size: 13px;
+}
+.cell-chosen.vis { display: flex; }
+.clr { font-size: 12px; color: var(--hint); cursor: pointer; text-decoration: underline; }
+
+/* FORM */
+.field { margin-bottom: 11px; }
+.flabel { font-size: 12px; font-weight: 600; color: var(--hint); margin-bottom: 5px; display: block; }
+.field input, .field select {
+  width: 100%; padding: 11px 13px;
+  border: 1.5px solid rgba(128,128,128,0.18);
+  border-radius: var(--rs); font-size: 15px;
+  background: var(--bg); color: var(--text);
+  outline: none; transition: border-color .15s;
+  -webkit-appearance: none; appearance: none;
+}
+.field input:focus, .field select:focus { border-color: var(--accent); }
+.frow { display: flex; gap: 10px; }
+.frow .field { flex: 1; }
+.icounter {
+  display: flex; align-items: center;
+  border: 1.5px solid rgba(128,128,128,0.18);
+  border-radius: var(--rs); overflow: hidden;
+}
+.icounter .cbtn { background: var(--secondary); border-radius: 0; }
+.icounter .cval { flex: 1; border-radius: 0; }
+
+/* SUMMARY */
+.sum-card {
+  background: var(--secondary); border-radius: var(--r);
+  padding: 13px 14px; margin: 0 16px;
+}
+.srow {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 5px 0; font-size: 13px;
+  border-bottom: 1px solid rgba(128,128,128,0.09);
+}
+.srow:last-child { border-bottom: none; }
+.srow span:first-child { color: var(--hint); }
+.srow.stotal span:last-child { font-size: 17px; font-weight: 700; color: var(--accent); }
+
+/* MAIN BTN */
+.mbtn {
+  position: fixed; bottom: 0; left: 50%; transform: translateX(-50%);
+  width: 100%; max-width: 430px;
+  background: var(--btn); color: var(--btn-text);
+  border: none; padding: 15px;
+  font-size: 16px; font-weight: 600;
+  cursor: pointer; transition: opacity .15s;
+  z-index: 100; letter-spacing: .2px;
+}
+.mbtn:active { opacity: .85; }
+.mbtn:disabled { opacity: .45; cursor: not-allowed; }
+
+/* SUCCESS */
+.sicon {
+  width: 74px; height: 74px; border-radius: 50%;
+  background: var(--success-bg);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 38px; margin: 28px auto 14px;
+  animation: pop .42s cubic-bezier(.34,1.56,.64,1);
+}
+@keyframes pop { from { transform:scale(.4); opacity:0; } to { transform:scale(1); opacity:1; } }
+.stitle { text-align: center; font-size: 21px; font-weight: 700; margin-bottom: 4px; }
+.ssub { text-align: center; font-size: 14px; color: var(--hint); margin-bottom: 22px; }
+.bnum { text-align: center; font-size: 11px; color: var(--hint); margin-bottom: 2px; }
+.bcode { text-align: center; font-size: 19px; font-weight: 700; letter-spacing: 1px; color: var(--accent); margin-bottom: 22px; }
+#qrbox { display: flex; justify-content: center; margin-bottom: 14px; }
+#qrbox canvas, #qrbox img { border-radius: 12px; border: 4px solid white; box-shadow: 0 4px 18px rgba(0,0,0,.1); }
+.qrhint { text-align: center; font-size: 12px; color: var(--hint); margin-bottom: 18px; }
+.detail-card {
+  background: var(--secondary); border-radius: var(--r);
+  padding: 13px 14px; margin: 0 16px 14px;
+}
+.drow {
+  display: flex; justify-content: space-between;
+  padding: 6px 0; font-size: 13px;
+  border-bottom: 1px solid rgba(128,128,128,0.08);
+}
+.drow:last-child { border-bottom: none; }
+.drow span:first-child { color: var(--hint); }
+.drow span:last-child { font-weight: 500; text-align: right; max-width: 65%; }
+.abts { display: flex; gap: 10px; padding: 0 16px 10px; }
+.abt {
+  flex: 1; padding: 12px; border-radius: var(--rs);
+  font-size: 14px; font-weight: 600; cursor: pointer;
+  border: 1.5px solid rgba(128,128,128,0.18);
+  background: var(--bg); color: var(--text); transition: opacity .15s;
+}
+.abt.primary { background: var(--btn); color: var(--btn-text); border-color: var(--btn); }
+.abt:active { opacity: .8; }
+
+/* TOAST */
+.toast {
+  position: fixed; bottom: 96px; left: 50%; transform: translateX(-50%) translateY(16px);
+  background: rgba(20,20,20,0.9); color: white; padding: 10px 18px;
+  border-radius: 22px; font-size: 13px; opacity: 0;
+  transition: all .22s; z-index: 300; pointer-events: none; white-space: nowrap;
+  backdrop-filter: blur(8px);
+}
+.toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="hicon">🔐</div>
+  <div>
+    <div class="htitle">Камера хранения</div>
+    <div class="hsub" id="hsub">Выберите тариф</div>
+  </div>
+  <button class="back-btn" id="backbtn" style="display:none" onclick="goBack()">← Назад</button>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<!-- ══ SCREEN 1: ТАРИФЫ ══ -->
+<div class="screen active" id="s0">
+  <div class="section">
+    <div class="slabel">Выберите тариф</div>
+    <div class="tariff-list">
+
+      <div class="tcard" id="t1" onclick="selTariff(1)">
+        <div class="ticon">⏱️</div>
+        <div class="tinfo">
+          <div class="tname">1 час</div>
+          <div class="tdesc">Быстрое хранение</div>
+        </div>
+        <div class="tprice">100 ₽/шт</div>
+        <div class="tcheck">✓</div>
+      </div>
+
+      <div class="tcard" id="t2" onclick="selTariff(2)">
+        <div class="ticon">🕒</div>
+        <div class="tinfo">
+          <div class="tname">3 часа</div>
+          <div class="tdesc">Хватит на прогулку</div>
+        </div>
+        <div class="tprice">200 ₽/шт</div>
+        <div class="tcheck">✓</div>
+      </div>
+
+      <div class="tcard" id="t3" onclick="selTariff(3)">
+        <div class="ticon">☀️</div>
+        <div class="tinfo">
+          <div class="tname">Весь день</div>
+          <div class="tdesc">09:00 — 19:00</div>
+        </div>
+        <div class="tprice">300 ₽/шт</div>
+        <div class="tbadge">Выгодно</div>
+        <div class="tcheck">✓</div>
+      </div>
+
+      <div class="tcard" id="t4" onclick="selTariff(4)">
+        <div class="ticon">🌙</div>
+        <div class="tinfo">
+          <div class="tname">Вечерний</div>
+          <div class="tdesc">После 19:00, почасово</div>
+        </div>
+        <div class="tprice">100 ₽/час</div>
+        <div class="tcheck">✓</div>
+      </div>
+
+      <div class="sub-picker" id="hp">
+        <div class="sub-label">Количество часов:</div>
+        <div class="counter">
+          <button class="cbtn" onclick="chHours(-1)">−</button>
+          <div class="cval" id="hval">1</div>
+          <button class="cbtn" onclick="chHours(1)">+</button>
+        </div>
+      </div>
+
+      <div class="tcard" id="t5" onclick="selTariff(5)">
+        <div class="ticon">📦</div>
+        <div class="tinfo">
+          <div class="tname">Суточное</div>
+          <div class="tdesc">24 часа хранения</div>
+        </div>
+        <div class="tprice">600 ₽/сут</div>
+        <div class="tbadge">Длительное</div>
+        <div class="tcheck">✓</div>
+      </div>
+
+      <div class="sub-picker" id="dp">
+        <div class="sub-label">Количество суток:</div>
+        <div class="counter">
+          <button class="cbtn" onclick="chDays(-1)">−</button>
+          <div class="cval" id="dval">1</div>
+          <button class="cbtn" onclick="chDays(1)">+</button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- ══ SCREEN 2: ЯЧЕЙКА ══ -->
+<div class="screen" id="s1">
+  <div class="cells-meta">
+    <div class="slabel" style="margin:0">100 ячеек</div>
+    <div class="legend">
+      <div class="leg"><div class="ldot" style="background:var(--bg);border:1.5px solid rgba(128,128,128,.2)"></div>Свободна</div>
+      <div class="leg"><div class="ldot" style="background:var(--danger-bg);border:1.5px solid rgba(239,68,68,.3)"></div>Занята</div>
+      <div class="leg"><div class="ldot" style="background:var(--accent)"></div>Выбрана</div>
+    </div>
+  </div>
+  <div class="cells-grid" id="cgrid"></div>
+  <div class="cell-chosen" id="cchosen">
+    <span id="ctext">Ячейка не выбрана</span>
+    <span class="clr" onclick="clearCell()">Сбросить</span>
+  </div>
+</div>
+
+<!-- ══ SCREEN 3: ДЕТАЛИ ══ -->
+<div class="screen" id="s2">
+  <div class="section">
+    <div class="slabel">Данные</div>
+
+    <div class="field">
+      <label class="flabel">Имя</label>
+      <input type="text" id="fn" placeholder="Ваше имя" maxlength="60" oninput="updSum()">
+    </div>
+
+    <div class="field">
+      <label class="flabel">Телефон (необязательно)</label>
+      <input type="tel" id="fp" placeholder="+7 (___) ___-__-__">
+    </div>
+
+    <div class="frow">
+      <div class="field">
+        <label class="flabel">Дата</label>
+        <input type="date" id="fd" onchange="updSum()">
+      </div>
+      <div class="field" id="timefield">
+        <label class="flabel">Время начала</label>
+        <input type="time" id="ft" step="1800" onchange="updSum()">
+      </div>
+    </div>
+
+    <div class="field">
+      <label class="flabel">Количество вещей</label>
+      <div class="icounter">
+        <button class="cbtn" onclick="chItems(-1)">−</button>
+        <div class="cval" id="ival">1</div>
+        <button class="cbtn" onclick="chItems(1)">+</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="sum-card">
+    <div class="srow"><span>Тариф</span><span id="ss-t">—</span></div>
+    <div class="srow"><span>Ячейка</span><span id="ss-c">—</span></div>
+    <div class="srow"><span>Вещей</span><span id="ss-i">1 шт</span></div>
+    <div class="srow"><span>Дата / время</span><span id="ss-d">—</span></div>
+    <div class="srow stotal"><span>Итого</span><span id="ss-tot">0 ₽</span></div>
+  </div>
+</div>
+
+<!-- ══ SCREEN 4: УСПЕХ ══ -->
+<div class="screen" id="s3">
+  <div class="sicon">✅</div>
+  <div class="stitle">Забронировано!</div>
+  <div class="ssub">Покажите QR-код при входе в камеру хранения</div>
+  <div class="bnum">Номер бронирования</div>
+  <div class="bcode" id="bcode"></div>
+  <div id="qrbox"></div>
+  <div class="qrhint">Сканируйте на стойке или покажите сотруднику</div>
+  <div class="detail-card">
+    <div class="drow"><span>Ячейка</span><span id="rc"></span></div>
+    <div class="drow"><span>Тариф</span><span id="rt"></span></div>
+    <div class="drow"><span>Дата</span><span id="rd"></span></div>
+    <div class="drow"><span>Время</span><span id="rti"></span></div>
+    <div class="drow"><span>Вещей</span><span id="ri"></span></div>
+    <div class="drow"><span>Имя</span><span id="rn"></span></div>
+    <div class="drow"><span>К оплате</span><span id="rtot" style="color:var(--accent);font-weight:700"></span></div>
+  </div>
+  <div class="abts">
+    <button class="abt" onclick="saveQR()">💾 Сохранить QR</button>
+    <button class="abt primary" onclick="newBook()">+ Новая бронь</button>
+  </div>
+</div>
+
+<button class="mbtn" id="mbtn" onclick="next()">Далее →</button>
+
+<script>
+const tg = window.Telegram && window.Telegram.WebApp;
+if (tg) { tg.ready(); tg.expand(); }
+
+const ST = { tariff:null, hours:1, days:1, cell:null, items:1, step:0 };
+
+// busy cells simulation
+const busy = new Set();
+(()=>{ const a=[...Array(100)].map((_,i)=>i+1).sort(()=>Math.random()-.5); a.slice(0,24).forEach(n=>busy.add(n)); })();
+
+// BUILD CELLS
+function buildCells(){
+  const g=document.getElementById('cgrid'); g.innerHTML='';
+  for(let i=1;i<=100;i++){
+    const d=document.createElement('div');
+    d.className='cell'+(busy.has(i)?' busy':'');
+    d.id='cl'+i; d.textContent=i;
+    if(!busy.has(i)) d.onclick=()=>selCell(i);
+    g.appendChild(d);
+  }
+}
+buildCells();
+
+// TARIFF
+function selTariff(n){
+  ST.tariff=n;
+  document.querySelectorAll('.tcard').forEach(c=>c.classList.remove('sel'));
+  document.getElementById('t'+n).classList.add('sel');
+  document.getElementById('hp').classList.toggle('vis', n===4);
+  document.getElementById('dp').classList.toggle('vis', n===5);
+  updBtn();
+}
+function chHours(d){ ST.hours=Math.max(1,Math.min(24,ST.hours+d)); document.getElementById('hval').textContent=ST.hours; updSum(); }
+function chDays(d){ ST.days=Math.max(1,Math.min(30,ST.days+d)); document.getElementById('dval').textContent=ST.days; updSum(); }
+
+// CELL
+function selCell(n){
+  if(ST.cell){ const p=document.getElementById('cl'+ST.cell); if(p) p.classList.remove('sel'); }
+  ST.cell=n;
+  document.getElementById('cl'+n).classList.add('sel');
+  document.getElementById('ctext').textContent='✓ Ячейка №'+n+' выбрана';
+  document.getElementById('cchosen').classList.add('vis');
+  updBtn();
+  if(tg&&tg.HapticFeedback) tg.HapticFeedback.selectionChanged();
+}
+function clearCell(){
+  if(ST.cell){ const e=document.getElementById('cl'+ST.cell); if(e) e.classList.remove('sel'); }
+  ST.cell=null;
+  document.getElementById('cchosen').classList.remove('vis');
+  updBtn();
+}
+
+// ITEMS
+function chItems(d){ ST.items=Math.max(1,Math.min(20,ST.items+d)); document.getElementById('ival').textContent=ST.items; updSum(); }
+
+// NAV
+const SCS=['s0','s1','s2','s3'];
+const HDRS=['Выберите тариф','Выберите ячейку','Детали бронирования','Подтверждение'];
+const BTNS=['Далее →','Далее →','Забронировать ✓',''];
+
+function showS(i){
+  SCS.forEach((s,j)=>document.getElementById(s).classList.toggle('active',i===j));
+  ST.step=i;
+  document.getElementById('hsub').textContent=HDRS[i];
+  document.getElementById('backbtn').style.display=(i>0&&i<3)?'block':'none';
+  const mb=document.getElementById('mbtn');
+  mb.style.display=i===3?'none':'block';
+  mb.textContent=BTNS[i];
+  updBtn();
+  if(i===2) initDetails();
+  if(i===3) buildSuccess();
+  window.scrollTo(0,0);
+}
+function goBack(){ if(ST.step>0) showS(ST.step-1); }
+function next(){
+  if(ST.step===0){ if(!ST.tariff){ toast('Выберите тариф'); return; } showS(1); }
+  else if(ST.step===1){ if(!ST.cell){ toast('Выберите ячейку'); return; } showS(2); }
+  else if(ST.step===2){ if(!validateD()) return; showS(3); if(tg&&tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('success'); }
+}
+
+// DETAILS
+function initDetails(){
+  const now=new Date();
+  const pad=n=>String(n).padStart(2,'0');
+  const today=`${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}`;
+  const fd=document.getElementById('fd'); fd.value=today; fd.min=today;
+  const ft=document.getElementById('ft');
+  const tf=document.getElementById('timefield');
+  if(ST.tariff===3){ ft.value='09:00'; ft.disabled=true; tf.style.display='block'; }
+  else if(ST.tariff===4){ ft.min='19:00'; ft.value='19:00'; ft.disabled=false; tf.style.display='block'; }
+  else if(ST.tariff===5){ tf.style.display='none'; }
+  else { const h=pad(now.getHours()); const m=now.getMinutes()<30?'00':'30'; ft.value=h+':'+m; ft.disabled=false; ft.min=''; tf.style.display='block'; }
+  if(tg&&tg.initDataUnsafe&&tg.initDataUnsafe.user){
+    const u=tg.initDataUnsafe.user;
+    document.getElementById('fn').value=[u.first_name,u.last_name].filter(Boolean).join(' ');
+  }
+  document.getElementById('ival').textContent=ST.items;
+  updSum();
+}
+
+function calcTotal(){
+  const t=ST.tariff;
+  if(t===1) return 100*ST.items;
+  if(t===2) return 200*ST.items;
+  if(t===3) return 300*ST.items;
+  if(t===4) return 100*ST.hours*ST.items;
+  if(t===5) return 600*ST.days*ST.items;
+  return 0;
+}
+function tariffLabel(){
+  const t=ST.tariff;
+  if(t===1) return '1 час — 100 ₽/шт';
+  if(t===2) return '3 часа — 200 ₽/шт';
+  if(t===3) return 'Весь день (09:00–19:00)';
+  if(t===4) return `Вечерний, ${ST.hours} ч × 100 ₽`;
+  if(t===5) return `Суточное, ${ST.days} сут × 600 ₽`;
+  return '—';
+}
+function fmtDate(s){ if(!s) return '—'; const [y,m,d]=s.split('-'); const mn=['янв','фев','мар','апр','май','июн','июл','авг','сен','окт','ноя','дек']; return `${d} ${mn[+m-1]} ${y}`; }
+
+function updSum(){
+  const tot=calcTotal();
+  document.getElementById('ss-t').textContent=tariffLabel();
+  document.getElementById('ss-c').textContent=ST.cell?'Ячейка №'+ST.cell:'—';
+  document.getElementById('ss-i').textContent=ST.items+' шт';
+  const dt=document.getElementById('fd')?document.getElementById('fd').value:'';
+  const tm=document.getElementById('ft')?document.getElementById('ft').value:'';
+  let dstr=fmtDate(dt); if(ST.tariff!==5&&tm) dstr+=', '+tm;
+  document.getElementById('ss-d').textContent=dstr;
+  document.getElementById('ss-tot').textContent=tot.toLocaleString('ru-RU')+' ₽';
+}
+
+function validateD(){
+  const name=document.getElementById('fn').value.trim();
+  const date=document.getElementById('fd').value;
+  const time=document.getElementById('ft').value;
+  if(!name){ toast('Введите имя'); return false; }
+  if(!date){ toast('Выберите дату'); return false; }
+  if(ST.tariff!==5&&!time){ toast('Выберите время'); return false; }
+  if(ST.tariff===4&&time<'19:00'){ toast('Вечерний тариф — с 19:00'); return false; }
+  return true;
+}
+
+// SUCCESS
+function buildSuccess(){
+  const date=document.getElementById('fd').value;
+  const time=document.getElementById('ft').value;
+  const name=document.getElementById('fn').value.trim();
+  const tot=calcTotal();
+  const now=new Date(); const pad=n=>String(n).padStart(2,'0');
+  const dc=`${now.getFullYear()}${pad(now.getMonth()+1)}${pad(now.getDate())}`;
+  const bid=`LS-${dc}-${String(Math.floor(Math.random()*9000)+1000)}`;
+
+  document.getElementById('bcode').textContent=bid;
+  document.getElementById('rc').textContent='Ячейка №'+ST.cell;
+  document.getElementById('rt').textContent=tariffLabel();
+  document.getElementById('rd').textContent=fmtDate(date);
+  document.getElementById('rti').textContent=ST.tariff===5?'—':(time||'—');
+  document.getElementById('ri').textContent=ST.items+' шт';
+  document.getElementById('rn').textContent=name;
+  document.getElementById('rtot').textContent=tot.toLocaleString('ru-RU')+' ₽';
+
+  const qrData=JSON.stringify({id:bid,cell:ST.cell,tariff:tariffLabel(),date,time:ST.tariff===5?'сутки':time,items:ST.items,name,total:tot});
+  const box=document.getElementById('qrbox'); box.innerHTML='';
+  try{ new QRCode(box,{text:qrData,width:200,height:200,colorDark:'#111111',colorLight:'#ffffff',correctLevel:QRCode.CorrectLevel.M}); }
+  catch(e){ box.innerHTML='<p style="color:var(--hint);font-size:13px;text-align:center;padding:20px">QR-код сформирован</p>'; }
+  busy.add(ST.cell);
+}
+
+function saveQR(){
+  const canvas=document.querySelector('#qrbox canvas');
+  if(!canvas){ toast('QR-код не готов'); return; }
+  const a=document.createElement('a');
+  a.download=document.getElementById('bcode').textContent+'.png';
+  a.href=canvas.toDataURL('image/png'); a.click();
+  toast('QR сохранён');
+}
+
+function newBook(){
+  ST.tariff=null; ST.cell=null; ST.items=1; ST.hours=1; ST.days=1;
+  document.querySelectorAll('.tcard').forEach(c=>c.classList.remove('sel'));
+  document.getElementById('hp').classList.remove('vis');
+  document.getElementById('dp').classList.remove('vis');
+  document.getElementById('hval').textContent='1';
+  document.getElementById('dval').textContent='1';
+  buildCells(); showS(0);
+}
+
+function updBtn(){
+  const b=document.getElementById('mbtn');
+  if(ST.step===0) b.disabled=!ST.tariff;
+  else if(ST.step===1) b.disabled=!ST.cell;
+  else b.disabled=false;
+}
+
+function toast(msg){
+  const t=document.getElementById('toast');
+  t.textContent=msg; t.classList.add('show');
+  setTimeout(()=>t.classList.remove('show'),2300);
+}
+
+updBtn();
+</script>
+</body>
+</html>
