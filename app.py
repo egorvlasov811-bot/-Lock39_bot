@@ -13,15 +13,18 @@ from contextlib import asynccontextmanager
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
 
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart, Command
-from aiogram.types import InlineKeyboardButton, WebAppInfo, BufferedInputFile
+from aiogram.types import InlineKeyboardButton, WebAppInfo, BufferedInputFile, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.storage.memory import MemoryStorage
 
 import qrcode
 
@@ -31,6 +34,7 @@ WEBAPP_URL = os.getenv("WEBAPP_URL", "")
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID", "")
 PORT = int(os.getenv("PORT", "8000"))
 DB_FILE = "bookings.json"
+TOTAL_PLACES = 500
 
 # ─────────── БАЗА (JSON) ───────────
 
@@ -47,10 +51,49 @@ def save_db(data: dict):
     with open(DB_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
+def count_active_today() -> int:
+    """Сколько броней активны сегодня."""
+    db = load_db()
+    today = datetime.date.today().isoformat()
+    count = 0
+    for b in db.get("bookings", []):
+        if b.get("status") == "cancelled":
+            continue
+        if b.get("date") == today or "Суточное" in b.get("tariff", ""):
+            count += b.get("items", 1)
+    return count
+
+
+def get_active_booking_for_user(user_id: int) -> Optional[dict]:
+    """Возвращает активную бронь юзера, если есть."""
+    if not user_id:
+        return None
+    db = load_db()
+    today = datetime.date.today().isoformat()
+    for b in db.get("bookings", []):
+        if b.get("telegram_user_id") != user_id:
+            continue
+        if b.get("status") != "active":
+            continue
+        # Активной считаем, если дата >= сегодня (или суточная и ещё не истекла)
+        if b.get("date") >= today or "Суточное" in b.get("tariff", ""):
+            return b
+    return None
+
+
+def fmt_date_ru(s: str) -> str:
+    """ГГГГ-ММ-ДД → ДД.ММ.ГГГГ"""
+    if not s:
+        return "—"
+    try:
+        y, m, d = s.split("-")
+        return f"{d}.{m}.{y}"
+    except Exception:
+        return s
+
 # ─────────── QR ───────────
 
 def make_qr_image(data: str) -> bytes:
-    """Генерация QR-кода как PNG в байтах."""
     qr = qrcode.QRCode(version=1, error_correction=qrcode.constants.ERROR_CORRECT_M, box_size=10, border=2)
     qr.add_data(data)
     qr.make(fit=True)
@@ -67,16 +110,30 @@ dp: Optional[Dispatcher] = None
 
 if BOT_TOKEN:
     bot = Bot(token=BOT_TOKEN)
-    dp = Dispatcher()
+    dp = Dispatcher(storage=MemoryStorage())
+
+    # ──────── FSM: пошаговое бронирование в чате ────────
+    class BookFSM(StatesGroup):
+        tariff = State()
+        hours = State()
+        days = State()
+        date = State()
+        time = State()
+        items = State()
+        name = State()
+        phone = State()
+        confirm = State()
 
     @dp.message(CommandStart())
-    async def cmd_start(message: types.Message):
+    async def cmd_start(message: types.Message, state: FSMContext):
+        await state.clear()
         kb = InlineKeyboardBuilder()
         if WEBAPP_URL:
-            kb.add(InlineKeyboardButton(
-                text="🔐 Открыть камеру хранения",
+            kb.row(InlineKeyboardButton(
+                text="🔐 Открыть мини-приложение",
                 web_app=WebAppInfo(url=WEBAPP_URL)
             ))
+        kb.row(InlineKeyboardButton(text="💬 Забронировать в чате", callback_data="start_book"))
         text = (
             "👋 Добро пожаловать в камеру хранения!\n\n"
             "Здесь можно забронировать место для вещей.\n\n"
@@ -86,20 +143,27 @@ if BOT_TOKEN:
             "• Весь день (09:00–19:00) — 300 ₽/шт\n"
             "• После 19:00 — 100 ₽/час\n"
             "• Суточное — 600 ₽/сут\n\n"
+            "Выберите удобный способ бронирования 👇"
         )
-        if WEBAPP_URL:
-            text += "Нажмите кнопку ниже 👇"
-        else:
-            text += "⚠️ WEBAPP_URL не настроен."
-        await message.answer(text, parse_mode="Markdown", reply_markup=kb.as_markup() if WEBAPP_URL else None)
+        await message.answer(text, parse_mode="Markdown", reply_markup=kb.as_markup())
+
+    @dp.callback_query(F.data == "start_book")
+    async def cb_start_book(callback: types.CallbackQuery, state: FSMContext):
+        """Запустить FSM-бронирование из меню /start."""
+        await callback.answer()
+        # Эмулируем команду /book
+        await cmd_book(callback.message, state)
 
     @dp.message(Command("help"))
     async def cmd_help(message: types.Message):
         await message.answer(
-            "ℹ️ *Помощь*\n\n"
-            "/start — открыть бронирование\n"
+            "ℹ️ *Команды бота*\n\n"
+            "/start — главное меню\n"
+            "/book — забронировать через чат\n"
             "/mybookings — мои бронирования\n"
-            "/help — эта справка",
+            "/cancel — отменить активную бронь\n"
+            "/help — справка\n\n"
+            "Также можно открыть мини-приложение через кнопку меню снизу.",
             parse_mode="Markdown"
         )
 
@@ -108,119 +172,617 @@ if BOT_TOKEN:
         db = load_db()
         my = [b for b in db.get("bookings", []) if b.get("telegram_user_id") == message.from_user.id]
         if not my:
-            await message.answer("У вас пока нет активных бронирований.\nЧтобы создать — нажмите /start")
+            await message.answer("У вас пока нет бронирований.\nЧтобы создать — /start")
             return
-        # Последние 5 броней
         for b in my[-5:]:
+            status_label = {"active":"✅ Активна","cancelled":"❌ Отменена","completed":"☑️ Завершена"}.get(b.get("status","active"),"")
             text = (
-                f"🔐 *Бронирование*\n"
+                f"🔐 *Бронирование* {status_label}\n"
                 f"🆔 `{b['booking_id']}`\n"
-                f"📦 Ячейка №{b['cell']}\n"
+                f"📦 Место №{b.get('place_num','—')}\n"
                 f"💰 {b['tariff']}\n"
-                f"📅 {b['date']} {b.get('time') or ''}\n"
+                f"📅 {fmt_date_ru(b['date'])} {b.get('time') or ''}\n"
                 f"🎒 {b['items']} шт\n"
                 f"💵 {b['total']:,} ₽"
             )
             await message.answer(text, parse_mode="Markdown")
 
+    @dp.message(Command("cancel"))
+    async def cmd_cancel(message: types.Message):
+        """Отмена активной брони с подтверждением."""
+        booking = get_active_booking_for_user(message.from_user.id)
+        if not booking:
+            await message.answer(
+                "У вас нет активной брони, нечего отменять.\n"
+                "Чтобы создать новую — /start"
+            )
+            return
+
+        kb = InlineKeyboardBuilder()
+        kb.row(
+            InlineKeyboardButton(text="✅ Да, отменить", callback_data=f"cancel_yes:{booking['booking_id']}"),
+            InlineKeyboardButton(text="↩️ Нет, оставить", callback_data="cancel_no")
+        )
+        text = (
+            f"⚠️ *Отмена бронирования*\n\n"
+            f"Вы действительно хотите отменить бронь?\n\n"
+            f"🆔 `{booking['booking_id']}`\n"
+            f"📦 Место №{booking.get('place_num','—')}\n"
+            f"💰 {booking['tariff']}\n"
+            f"📅 {fmt_date_ru(booking['date'])} {booking.get('time') or ''}\n"
+            f"🎒 {booking['items']} шт\n"
+            f"💵 {booking['total']:,} ₽\n\n"
+            f"⚠️ *Это действие необратимо.* После отмены вы сможете создать новую бронь."
+        )
+        await message.answer(text, parse_mode="Markdown", reply_markup=kb.as_markup())
+
+    @dp.callback_query(F.data.startswith("ask_cancel:"))
+    async def cb_ask_cancel(callback: types.CallbackQuery):
+        """Запрос подтверждения отмены (нажата кнопка под QR)."""
+        booking_id = callback.data.split(":", 1)[1]
+        db = load_db()
+        target = None
+        for b in db.get("bookings", []):
+            if b["booking_id"] == booking_id and b.get("telegram_user_id") == callback.from_user.id:
+                target = b
+                break
+        if not target:
+            await callback.answer("Бронь не найдена", show_alert=True)
+            return
+        if target.get("status") == "cancelled":
+            await callback.answer("Эта бронь уже отменена", show_alert=True)
+            return
+
+        kb = InlineKeyboardBuilder()
+        kb.row(
+            InlineKeyboardButton(text="✅ Да, отменить", callback_data=f"cancel_yes:{booking_id}"),
+            InlineKeyboardButton(text="↩️ Нет", callback_data="cancel_no")
+        )
+        await callback.message.answer(
+            f"⚠️ *Подтвердите отмену*\n\n"
+            f"Точно отменить бронь?\n"
+            f"🆔 `{booking_id}`\n"
+            f"📦 Место №{target.get('place_num','—')}\n"
+            f"💵 {target['total']:,} ₽\n\n"
+            f"⚠️ Действие необратимо.",
+            parse_mode="Markdown",
+            reply_markup=kb.as_markup()
+        )
+        await callback.answer()
+
+    @dp.callback_query(F.data.startswith("cancel_yes:"))
+    async def cb_cancel_yes(callback: types.CallbackQuery):
+        """Подтверждение отмены."""
+        booking_id = callback.data.split(":", 1)[1]
+        db = load_db()
+        target = None
+        for b in db.get("bookings", []):
+            if b["booking_id"] == booking_id and b.get("telegram_user_id") == callback.from_user.id:
+                target = b
+                break
+
+        if not target:
+            await callback.answer("Бронь не найдена", show_alert=True)
+            return
+        if target.get("status") == "cancelled":
+            await callback.answer("Эта бронь уже отменена", show_alert=True)
+            return
+
+        target["status"] = "cancelled"
+        target["cancelled_at"] = datetime.datetime.now().isoformat()
+        save_db(db)
+
+        # Уведомить юзера
+        await callback.message.edit_text(
+            f"❌ *Бронь отменена*\n\n"
+            f"🆔 `{booking_id}`\n\n"
+            f"Места освобождены. Теперь вы можете создать новую бронь через /start",
+            parse_mode="Markdown"
+        )
+        await callback.answer("Бронь отменена")
+
+        # Уведомить админа
+        if ADMIN_CHAT_ID:
+            try:
+                user_info = f" (@{target.get('telegram_username')})" if target.get("telegram_username") else ""
+                await bot.send_message(
+                    chat_id=int(ADMIN_CHAT_ID),
+                    text=(
+                        f"❌ *Бронь отменена пользователем*\n"
+                        f"━━━━━━━━━━━━━━\n"
+                        f"🆔 `{booking_id}`\n"
+                        f"📦 Место №{target.get('place_num','—')}\n"
+                        f"👤 {target['name']}{user_info}\n"
+                        f"📞 {target['phone']}\n"
+                        f"💵 Сумма была: {target['total']:,} ₽"
+                    ),
+                    parse_mode="Markdown"
+                )
+            except Exception as e:
+                print(f"[admin cancel notify] {e}")
+
+    @dp.callback_query(F.data == "cancel_no")
+    async def cb_cancel_no(callback: types.CallbackQuery):
+        """Передумали отменять."""
+        await callback.message.edit_text(
+            "✅ Хорошо, бронь сохранена.\n\n"
+            "Чтобы посмотреть детали — /mybookings"
+        )
+        await callback.answer("Бронь не отменена")
+
+    # ════════════════════════════════════════
+    # БРОНИРОВАНИЕ ЧЕРЕЗ ЧАТ (FSM)
+    # ════════════════════════════════════════
+
+    TARIFFS_BOT = {
+        "1": {"name": "1 час — 100 ₽/шт", "price_per_item": 100, "needs_time": True},
+        "2": {"name": "3 часа — 200 ₽/шт", "price_per_item": 200, "needs_time": True},
+        "3": {"name": "Весь день (09:00–19:00) — 300 ₽/шт", "price_per_item": 300, "needs_time": False},
+        "4": {"name": "Вечерний (после 19:00) — 100 ₽/час", "price_per_item": 100, "needs_time": True, "needs_hours": True},
+        "5": {"name": "Суточное — 600 ₽/сут", "price_per_item": 600, "needs_time": False, "needs_days": True},
+    }
+
+    def calc_booking_total(data: dict) -> int:
+        t = data["tariff"]
+        items = data["items"]
+        price = TARIFFS_BOT[t]["price_per_item"]
+        if t == "4":
+            return price * data.get("hours", 1) * items
+        if t == "5":
+            return price * data.get("days", 1) * items
+        return price * items
+
+    def tariff_label_bot(data: dict) -> str:
+        t = data["tariff"]
+        if t == "4":
+            return f"Вечерний, {data.get('hours',1)} ч × 100 ₽"
+        if t == "5":
+            return f"Суточное, {data.get('days',1)} сут × 600 ₽"
+        return TARIFFS_BOT[t]["name"]
+
+    @dp.message(Command("book"))
+    async def cmd_book(message: types.Message, state: FSMContext):
+        """Начало бронирования через чат."""
+        # Проверка: нет ли уже активной брони
+        existing = get_active_booking_for_user(message.from_user.id)
+        if existing:
+            await message.answer(
+                f"⚠️ У вас уже есть активная бронь:\n"
+                f"🆔 `{existing['booking_id']}`\n\n"
+                f"Сначала отмените её через /cancel, чтобы создать новую.",
+                parse_mode="Markdown"
+            )
+            return
+
+        # Проверка свободных мест
+        free = TOTAL_PLACES - count_active_today()
+        if free <= 0:
+            await message.answer("😔 К сожалению, все места заняты. Попробуйте позже.")
+            return
+
+        await state.clear()
+        kb = InlineKeyboardBuilder()
+        kb.row(InlineKeyboardButton(text="⏱ 1 час — 100 ₽/шт", callback_data="bt:1"))
+        kb.row(InlineKeyboardButton(text="🕒 3 часа — 200 ₽/шт", callback_data="bt:2"))
+        kb.row(InlineKeyboardButton(text="☀️ Весь день — 300 ₽/шт", callback_data="bt:3"))
+        kb.row(InlineKeyboardButton(text="🌙 Вечерний — 100 ₽/час", callback_data="bt:4"))
+        kb.row(InlineKeyboardButton(text="📦 Суточное — 600 ₽/сут", callback_data="bt:5"))
+        kb.row(InlineKeyboardButton(text="❌ Отмена", callback_data="bt:cancel"))
+
+        await message.answer(
+            f"🔐 *Новое бронирование*\n\n"
+            f"Свободно мест: *{free}* из {TOTAL_PLACES}\n\n"
+            f"Выберите тариф 👇",
+            parse_mode="Markdown",
+            reply_markup=kb.as_markup()
+        )
+        await state.set_state(BookFSM.tariff)
+
+    @dp.callback_query(F.data == "bt:cancel")
+    async def bt_cancel(callback: types.CallbackQuery, state: FSMContext):
+        await state.clear()
+        await callback.message.edit_text("❌ Бронирование отменено.")
+        await callback.answer()
+
+    @dp.callback_query(BookFSM.tariff, F.data.startswith("bt:"))
+    async def bt_tariff(callback: types.CallbackQuery, state: FSMContext):
+        t = callback.data.split(":")[1]
+        if t not in TARIFFS_BOT:
+            await callback.answer("Неверный тариф", show_alert=True)
+            return
+        await state.update_data(tariff=t)
+        tariff_info = TARIFFS_BOT[t]
+        await callback.answer()
+
+        # Тариф 4 — спросить количество часов
+        if tariff_info.get("needs_hours"):
+            kb = InlineKeyboardBuilder()
+            for h in [1, 2, 3, 4, 5, 6]:
+                kb.button(text=f"{h} ч", callback_data=f"bh:{h}")
+            kb.adjust(3)
+            await callback.message.edit_text(
+                f"✓ Тариф: *{tariff_info['name']}*\n\n"
+                f"Сколько часов хранения после 19:00?",
+                parse_mode="Markdown",
+                reply_markup=kb.as_markup()
+            )
+            await state.set_state(BookFSM.hours)
+            return
+
+        # Тариф 5 — спросить количество суток
+        if tariff_info.get("needs_days"):
+            kb = InlineKeyboardBuilder()
+            for d in [1, 2, 3, 5, 7, 14]:
+                kb.button(text=f"{d} сут", callback_data=f"bd:{d}")
+            kb.adjust(3)
+            await callback.message.edit_text(
+                f"✓ Тариф: *{tariff_info['name']}*\n\n"
+                f"Сколько суток хранения?",
+                parse_mode="Markdown",
+                reply_markup=kb.as_markup()
+            )
+            await state.set_state(BookFSM.days)
+            return
+
+        # Иначе — сразу к дате
+        await ask_date(callback.message, state, edit=True, tariff_name=tariff_info['name'])
+
+    @dp.callback_query(BookFSM.hours, F.data.startswith("bh:"))
+    async def bt_hours(callback: types.CallbackQuery, state: FSMContext):
+        hours = int(callback.data.split(":")[1])
+        await state.update_data(hours=hours)
+        await callback.answer()
+        data = await state.get_data()
+        await ask_date(callback.message, state, edit=True, tariff_name=tariff_label_bot(data))
+
+    @dp.callback_query(BookFSM.days, F.data.startswith("bd:"))
+    async def bt_days(callback: types.CallbackQuery, state: FSMContext):
+        days = int(callback.data.split(":")[1])
+        await state.update_data(days=days)
+        await callback.answer()
+        data = await state.get_data()
+        await ask_date(callback.message, state, edit=True, tariff_name=tariff_label_bot(data))
+
+    async def ask_date(message: types.Message, state: FSMContext, edit: bool = False, tariff_name: str = ""):
+        """Спрашивает дату — кнопки на ближайшие 7 дней."""
+        kb = InlineKeyboardBuilder()
+        today = datetime.date.today()
+        for i in range(7):
+            d = today + datetime.timedelta(days=i)
+            label = "Сегодня" if i == 0 else ("Завтра" if i == 1 else d.strftime("%d.%m"))
+            kb.button(text=label, callback_data=f"bdate:{d.isoformat()}")
+        kb.adjust(3)
+        text = f"✓ Тариф: *{tariff_name}*\n\nВыберите дату хранения:"
+        if edit:
+            await message.edit_text(text, parse_mode="Markdown", reply_markup=kb.as_markup())
+        else:
+            await message.answer(text, parse_mode="Markdown", reply_markup=kb.as_markup())
+        await state.set_state(BookFSM.date)
+
+    @dp.callback_query(BookFSM.date, F.data.startswith("bdate:"))
+    async def bt_date(callback: types.CallbackQuery, state: FSMContext):
+        date_iso = callback.data.split(":", 1)[1]
+        await state.update_data(date=date_iso)
+        await callback.answer()
+        data = await state.get_data()
+        t = data["tariff"]
+
+        # Тариф 3 — время фиксировано 09:00
+        if t == "3":
+            await state.update_data(time="09:00")
+            await ask_items(callback.message, state, edit=True, data=data)
+            return
+        # Тариф 5 — без времени
+        if t == "5":
+            await state.update_data(time=None)
+            await ask_items(callback.message, state, edit=True, data=data)
+            return
+
+        # Иначе — выбираем время кнопками
+        kb = InlineKeyboardBuilder()
+        if t == "4":
+            # Вечерние слоты
+            slots = ["19:00", "19:30", "20:00", "20:30", "21:00", "22:00"]
+        else:
+            # Дневные слоты
+            slots = ["09:00", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00", "17:00", "18:00"]
+        for s in slots:
+            kb.button(text=s, callback_data=f"btime:{s}")
+        kb.adjust(3)
+        await callback.message.edit_text(
+            f"✓ Тариф: *{tariff_label_bot(data)}*\n"
+            f"✓ Дата: *{fmt_date_ru(date_iso)}*\n\n"
+            f"Выберите время начала:",
+            parse_mode="Markdown",
+            reply_markup=kb.as_markup()
+        )
+        await state.set_state(BookFSM.time)
+
+    @dp.callback_query(BookFSM.time, F.data.startswith("btime:"))
+    async def bt_time(callback: types.CallbackQuery, state: FSMContext):
+        time_str = callback.data.split(":", 1)[1]
+        await state.update_data(time=time_str)
+        await callback.answer()
+        data = await state.get_data()
+        await ask_items(callback.message, state, edit=True, data=data)
+
+    async def ask_items(message: types.Message, state: FSMContext, edit: bool = False, data: dict = None):
+        """Спрашивает количество мест."""
+        kb = InlineKeyboardBuilder()
+        for n in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]:
+            kb.button(text=str(n), callback_data=f"bitems:{n}")
+        kb.adjust(5)
+        text = (
+            f"✓ Тариф: *{tariff_label_bot(data)}*\n"
+            f"✓ Дата: *{fmt_date_ru(data['date'])}*"
+        )
+        if data.get("time"):
+            text += f"\n✓ Время: *{data['time']}*"
+        text += "\n\nСколько мест нужно? (до 10)"
+        if edit:
+            await message.edit_text(text, parse_mode="Markdown", reply_markup=kb.as_markup())
+        else:
+            await message.answer(text, parse_mode="Markdown", reply_markup=kb.as_markup())
+        await state.set_state(BookFSM.items)
+
+    @dp.callback_query(BookFSM.items, F.data.startswith("bitems:"))
+    async def bt_items(callback: types.CallbackQuery, state: FSMContext):
+        items = int(callback.data.split(":")[1])
+        # Проверим что мест хватает
+        free = TOTAL_PLACES - count_active_today()
+        if items > free:
+            await callback.answer(f"Свободно только {free} мест", show_alert=True)
+            return
+        await state.update_data(items=items)
+        await callback.answer()
+        # Имя — берём из профиля автоматически или просим ввести
+        user = callback.from_user
+        suggested_name = " ".join(filter(None, [user.first_name, user.last_name]))
+        await state.update_data(suggested_name=suggested_name)
+
+        kb = InlineKeyboardBuilder()
+        if suggested_name:
+            kb.button(text=f"✓ {suggested_name}", callback_data="bname:use")
+        kb.button(text="✏️ Ввести другое", callback_data="bname:custom")
+        kb.adjust(1)
+
+        await callback.message.edit_text(
+            f"Введите ваше имя или используйте имя из профиля Telegram:",
+            reply_markup=kb.as_markup()
+        )
+        await state.set_state(BookFSM.name)
+
+    @dp.callback_query(BookFSM.name, F.data == "bname:use")
+    async def bt_name_use(callback: types.CallbackQuery, state: FSMContext):
+        data = await state.get_data()
+        await state.update_data(name=data.get("suggested_name", ""))
+        await callback.answer()
+        await callback.message.edit_text(
+            f"✓ Имя: *{data.get('suggested_name','')}*\n\n"
+            f"📞 Введите номер телефона:\n"
+            f"_Например: +79001234567_",
+            parse_mode="Markdown"
+        )
+        await state.set_state(BookFSM.phone)
+
+    @dp.callback_query(BookFSM.name, F.data == "bname:custom")
+    async def bt_name_custom(callback: types.CallbackQuery, state: FSMContext):
+        await callback.answer()
+        await callback.message.edit_text("Введите ваше имя:")
+        # Ждём текстовое сообщение в состоянии name
+
+    @dp.message(BookFSM.name)
+    async def bt_name_text(message: types.Message, state: FSMContext):
+        name = (message.text or "").strip()
+        if len(name) < 2:
+            await message.answer("Имя слишком короткое, введите ещё раз:")
+            return
+        await state.update_data(name=name)
+        await message.answer(
+            f"✓ Имя: *{name}*\n\n"
+            f"📞 Введите номер телефона:\n"
+            f"_Например: +79001234567_",
+            parse_mode="Markdown"
+        )
+        await state.set_state(BookFSM.phone)
+
+    @dp.message(BookFSM.phone)
+    async def bt_phone(message: types.Message, state: FSMContext):
+        phone = (message.text or "").strip()
+        digits = "".join(c for c in phone if c.isdigit())
+        if len(digits) < 10:
+            await message.answer("❌ Некорректный номер. Должно быть минимум 10 цифр. Введите ещё раз:")
+            return
+        await state.update_data(phone=phone)
+
+        # Показываем сводку и кнопки подтверждения
+        data = await state.get_data()
+        total = calc_booking_total(data)
+        await state.update_data(total=total)
+
+        text = (
+            f"📋 *Проверьте данные брони*\n"
+            f"━━━━━━━━━━━━━━\n"
+            f"💰 Тариф: {tariff_label_bot(data)}\n"
+            f"📅 Дата: {fmt_date_ru(data['date'])}\n"
+            f"⏰ Время: {data.get('time') or '—'}\n"
+            f"🎒 Мест: {data['items']} шт\n"
+            f"👤 Имя: {data['name']}\n"
+            f"📞 Тел.: {phone}\n"
+            f"💵 Итого: *{total:,} ₽*\n\n"
+            f"Всё верно?"
+        )
+        kb = InlineKeyboardBuilder()
+        kb.row(
+            InlineKeyboardButton(text="✅ Подтвердить", callback_data="bconfirm:yes"),
+            InlineKeyboardButton(text="❌ Отменить", callback_data="bconfirm:no")
+        )
+        await message.answer(text, parse_mode="Markdown", reply_markup=kb.as_markup())
+        await state.set_state(BookFSM.confirm)
+
+    @dp.callback_query(BookFSM.confirm, F.data == "bconfirm:no")
+    async def bt_confirm_no(callback: types.CallbackQuery, state: FSMContext):
+        await state.clear()
+        await callback.message.edit_text("❌ Бронирование отменено.\n\nНачать заново — /book")
+        await callback.answer()
+
+    @dp.callback_query(BookFSM.confirm, F.data == "bconfirm:yes")
+    async def bt_confirm_yes(callback: types.CallbackQuery, state: FSMContext):
+        data = await state.get_data()
+        await callback.answer("Создаём бронь...")
+
+        # Финальная проверка: ещё раз убеждаемся что нет активной брони и хватает мест
+        existing = get_active_booking_for_user(callback.from_user.id)
+        if existing:
+            await callback.message.edit_text(
+                f"⚠️ У вас уже появилась активная бронь:\n"
+                f"🆔 `{existing['booking_id']}`\n\n"
+                f"Отмените её через /cancel, чтобы создать новую.",
+                parse_mode="Markdown"
+            )
+            await state.clear()
+            return
+
+        free = TOTAL_PLACES - count_active_today()
+        if data["items"] > free:
+            await callback.message.edit_text(
+                f"😔 К сожалению, свободно только {free} мест, а вы выбрали {data['items']}.\n"
+                f"Начните заново — /book"
+            )
+            await state.clear()
+            return
+
+        # Генерируем ID
+        now = datetime.datetime.now()
+        bid = f"LS-{now.strftime('%Y%m%d')}-{now.strftime('%H%M%S')[-4:]}"
+        place_num = (TOTAL_PLACES - free) + 1
+
+        booking = {
+            "booking_id": bid,
+            "place_num": place_num,
+            "tariff": tariff_label_bot(data),
+            "date": data["date"],
+            "time": data.get("time"),
+            "items": data["items"],
+            "name": data["name"],
+            "phone": data["phone"],
+            "total": data["total"],
+            "telegram_user_id": callback.from_user.id,
+            "telegram_username": callback.from_user.username,
+            "created_at": now.isoformat(),
+            "status": "active",
+            "source": "bot_chat",
+        }
+
+        db = load_db()
+        db.setdefault("bookings", []).append(booking)
+        save_db(db)
+        await state.clear()
+
+        # Удаляем экран подтверждения
+        try:
+            await callback.message.edit_text(
+                f"✅ Бронь *{bid}* создана!\n\nСейчас пришлю QR-код...",
+                parse_mode="Markdown"
+            )
+        except Exception:
+            pass
+
+        # Шлём пользователю подтверждение с QR и админу уведомление
+        await send_user_confirmation(booking)
+        await notify_admin(booking)
+
 
 async def send_user_confirmation(booking: dict):
-    """Шлёт пользователю подтверждение брони с QR-кодом."""
+    """Шлёт пользователю подтверждение с QR-кодом."""
     if not bot:
         return
     user_id = booking.get("telegram_user_id")
     if not user_id:
-        print("[user_confirm] нет telegram_user_id, пропускаем")
         return
     try:
-        qr_data = json.dumps({
-            "id": booking["booking_id"],
-            "cell": booking["cell"],
-            "tariff": booking["tariff"],
-            "date": booking["date"],
-            "time": booking.get("time"),
-            "items": booking["items"],
-            "name": booking["name"],
-            "total": booking["total"]
-        }, ensure_ascii=False)
-
-        qr_bytes = make_qr_image(qr_data)
+        base = WEBAPP_URL.rstrip("/") if WEBAPP_URL else ""
+        qr_url = f"{base}/b/{booking['booking_id']}" if base else booking['booking_id']
+        qr_bytes = make_qr_image(qr_url)
 
         caption = (
             f"✅ *Бронирование подтверждено!*\n"
             f"━━━━━━━━━━━━━━\n"
             f"🆔 `{booking['booking_id']}`\n"
-            f"📦 Ячейка: *№{booking['cell']}*\n"
+            f"📦 Место: *№{booking.get('place_num','—')}*\n"
             f"💰 Тариф: {booking['tariff']}\n"
-            f"📅 Дата: {booking['date']}\n"
+            f"📅 Дата: {fmt_date_ru(booking['date'])}\n"
             f"⏰ Время: {booking.get('time') or '—'}\n"
             f"🎒 Вещей: {booking['items']} шт\n"
             f"👤 Имя: {booking['name']}\n"
+            f"📞 Телефон: {booking['phone']}\n"
             f"💵 К оплате: *{booking['total']:,} ₽*\n\n"
-            f"📲 *Покажите этот QR-код на стойке* при получении ячейки.\n"
-            f"Сохраните это сообщение или сделайте скриншот."
+            f"📲 Покажите этот QR-код на стойке — сотрудник отсканирует смартфоном."
         )
-
         photo = BufferedInputFile(qr_bytes, filename=f"booking_{booking['booking_id']}.png")
+
+        # Inline-кнопка отмены прямо под сообщением (с подтверждением)
+        kb = InlineKeyboardBuilder()
+        kb.add(InlineKeyboardButton(
+            text="❌ Отменить бронь",
+            callback_data=f"ask_cancel:{booking['booking_id']}"
+        ))
+
         await bot.send_photo(
             chat_id=user_id,
             photo=photo,
             caption=caption,
-            parse_mode="Markdown"
+            parse_mode="Markdown",
+            reply_markup=kb.as_markup()
         )
-        print(f"[user_confirm] отправлено пользователю {user_id}")
     except Exception as e:
-        print(f"[user_confirm] ошибка: {e}")
+        print(f"[user_confirm] {e}")
 
 
 async def notify_admin(booking: dict):
-    """Шлёт админу уведомление о новой брони."""
     if not bot or not ADMIN_CHAT_ID:
         return
     try:
-        user_info = ""
-        if booking.get("telegram_username"):
-            user_info = f" (@{booking['telegram_username']})"
+        user_info = f" (@{booking['telegram_username']})" if booking.get("telegram_username") else ""
         msg = (
             f"🔔 *Новое бронирование!*\n"
             f"━━━━━━━━━━━━━━\n"
             f"🆔 `{booking['booking_id']}`\n"
-            f"📦 Ячейка: *№{booking['cell']}*\n"
+            f"📦 Место: *№{booking.get('place_num','—')}*\n"
             f"💰 Тариф: {booking['tariff']}\n"
-            f"📅 Дата: {booking['date']}\n"
+            f"📅 Дата: {fmt_date_ru(booking['date'])}\n"
             f"⏰ Время: {booking.get('time') or '—'}\n"
             f"🎒 Вещей: {booking['items']} шт\n"
             f"👤 Имя: {booking['name']}{user_info}\n"
-            f"📞 Тел.: {booking.get('phone') or '—'}\n"
+            f"📞 Тел.: {booking['phone']}\n"
             f"💵 Итого: *{booking['total']:,} ₽*"
         )
         await bot.send_message(chat_id=int(ADMIN_CHAT_ID), text=msg, parse_mode="Markdown")
     except Exception as e:
-        print(f"[admin] error: {e}")
+        print(f"[admin] {e}")
 
 
 async def start_bot():
     if not bot or not dp:
-        print("⚠️ BOT_TOKEN не задан — бот не запускается")
         return
     print("🤖 Bot polling запущен")
     try:
         await dp.start_polling(bot)
     except Exception as e:
-        print(f"[bot] error: {e}")
+        print(f"[bot] {e}")
 
 
 # ─────────── API ───────────
 
 class BookingRequest(BaseModel):
     booking_id: str
-    cell: int
+    place_num: int
     tariff: str
     date: str
     time: Optional[str] = None
     items: int
     name: str
-    phone: Optional[str] = None
+    phone: str
     total: int
     telegram_user_id: Optional[int] = None
     telegram_username: Optional[str] = None
@@ -253,32 +815,60 @@ def root():
     return {"status": "ok"}
 
 
-@app.get("/api/cells")
-def get_cells():
-    db = load_db()
-    today = datetime.date.today().isoformat()
-    busy = set()
-    for b in db.get("bookings", []):
-        if b.get("date") == today or "Суточное" in b.get("tariff", ""):
-            busy.add(b["cell"])
-    return {"busy": sorted(busy), "total": 100}
+@app.get("/api/availability")
+def get_availability(user_id: Optional[int] = None):
+    active = count_active_today()
+    response = {"free": max(0, TOTAL_PLACES - active), "total": TOTAL_PLACES, "occupied": active}
+    # Если запросили с user_id — добавим инфу про активную бронь юзера
+    if user_id:
+        existing = get_active_booking_for_user(user_id)
+        if existing:
+            response["has_active"] = True
+            response["active_booking_id"] = existing["booking_id"]
+            response["active_items"] = existing.get("items", 1)
+        else:
+            response["has_active"] = False
+    return response
 
 
 @app.post("/api/booking")
 async def create_booking(req: BookingRequest):
+    # Лимит мест в одной брони
+    if req.items > 10:
+        raise HTTPException(400, "Максимум 10 мест в одной брони")
+    if req.items < 1:
+        raise HTTPException(400, "Минимум 1 место")
+
     db = load_db()
+    # Защита от дубля по booking_id
     for b in db.get("bookings", []):
-        if b["cell"] == req.cell and b.get("date") == req.date:
-            raise HTTPException(409, "Ячейка уже занята на эту дату")
+        if b["booking_id"] == req.booking_id:
+            raise HTTPException(409, "Это бронирование уже создано")
+
+    # Проверка: у юзера уже есть активная бронь?
+    if req.telegram_user_id:
+        existing = get_active_booking_for_user(req.telegram_user_id)
+        if existing:
+            raise HTTPException(
+                409,
+                f"У вас уже есть активная бронь {existing['booking_id']}. "
+                f"Дождитесь её окончания или отмените, чтобы создать новую."
+            )
+
+    # Проверка свободных мест
+    if count_active_today() + req.items > TOTAL_PLACES:
+        free_now = max(0, TOTAL_PLACES - count_active_today())
+        raise HTTPException(409, f"Недостаточно мест. Свободно: {free_now}")
+
     booking = req.model_dump()
     booking["created_at"] = datetime.datetime.now().isoformat()
     booking["status"] = "active"
     db.setdefault("bookings", []).append(booking)
     save_db(db)
-    # Уведомления в фоне
     asyncio.create_task(send_user_confirmation(booking))
     asyncio.create_task(notify_admin(booking))
-    return {"success": True, "booking_id": req.booking_id}
+    free = max(0, TOTAL_PLACES - count_active_today())
+    return {"success": True, "booking_id": req.booking_id, "free": free}
 
 
 @app.get("/api/bookings")
@@ -294,12 +884,119 @@ def list_bookings(date: Optional[str] = None):
 def cancel_booking(booking_id: str):
     db = load_db()
     bookings = db.get("bookings", [])
-    new_list = [b for b in bookings if b["booking_id"] != booking_id]
-    if len(new_list) == len(bookings):
+    found = False
+    for b in bookings:
+        if b["booking_id"] == booking_id:
+            b["status"] = "cancelled"
+            found = True
+            break
+    if not found:
         raise HTTPException(404, "Бронирование не найдено")
-    db["bookings"] = new_list
     save_db(db)
     return {"success": True}
+
+
+# ─────────── СТРАНИЦА БРОНИ (по QR-коду) ───────────
+
+@app.get("/b/{booking_id}", response_class=HTMLResponse)
+def view_booking(booking_id: str):
+    """Открывается при сканировании QR-кода смартфоном."""
+    db = load_db()
+    booking = next((b for b in db.get("bookings", []) if b["booking_id"] == booking_id), None)
+    if not booking:
+        return HTMLResponse(_not_found_html(booking_id), status_code=404)
+    return HTMLResponse(_booking_html(booking))
+
+
+def _booking_html(b: dict) -> str:
+    status = b.get("status", "active")
+    status_label = {"active": "Активна", "cancelled": "Отменена", "completed": "Завершена"}.get(status, status)
+    status_color = {"active": "#16a34a", "cancelled": "#dc2626", "completed": "#6b7280"}.get(status, "#16a34a")
+    return f"""<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Бронирование {b['booking_id']}</title>
+<style>
+* {{ box-sizing: border-box; margin: 0; padding: 0; }}
+body {{
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: #f4f4f5; color: #111; min-height: 100vh;
+  padding: 16px; max-width: 480px; margin: 0 auto;
+}}
+.card {{
+  background: white; border-radius: 16px; padding: 22px;
+  box-shadow: 0 4px 24px rgba(0,0,0,0.06); margin-bottom: 14px;
+}}
+.head {{ text-align: center; margin-bottom: 20px; }}
+.head .icon {{
+  width: 64px; height: 64px; border-radius: 50%;
+  background: #dcfce7; display: flex; align-items: center;
+  justify-content: center; font-size: 32px; margin: 0 auto 10px;
+}}
+.head .title {{ font-size: 18px; font-weight: 700; }}
+.head .sub {{ font-size: 13px; color: #888; margin-top: 4px; }}
+.bid {{
+  text-align: center; font-family: monospace; font-size: 16px;
+  font-weight: 700; color: #2678b6; letter-spacing: 1px;
+  background: rgba(38,120,182,0.08); padding: 10px;
+  border-radius: 10px; margin-bottom: 14px;
+}}
+.status {{
+  display: inline-block; padding: 4px 12px; border-radius: 20px;
+  font-size: 12px; font-weight: 600; color: white;
+  background: {status_color}; margin-bottom: 16px;
+}}
+.row {{
+  display: flex; justify-content: space-between; padding: 10px 0;
+  border-bottom: 1px solid #f0f0f0; font-size: 14px;
+}}
+.row:last-child {{ border-bottom: none; }}
+.row .lbl {{ color: #888; }}
+.row .val {{ font-weight: 500; text-align: right; max-width: 65%; }}
+.row.total .val {{ color: #2678b6; font-weight: 700; font-size: 16px; }}
+.note {{
+  font-size: 12px; color: #888; text-align: center;
+  margin-top: 16px; padding: 10px;
+}}
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="head">
+      <div class="icon">🔐</div>
+      <div class="title">Бронирование</div>
+      <div class="sub">Камера хранения</div>
+    </div>
+    <div style="text-align:center;">
+      <div class="status">{status_label}</div>
+    </div>
+    <div class="bid">{b['booking_id']}</div>
+    <div class="row"><span class="lbl">Место</span><span class="val">№{b.get('place_num','—')}</span></div>
+    <div class="row"><span class="lbl">Тариф</span><span class="val">{b['tariff']}</span></div>
+    <div class="row"><span class="lbl">Дата</span><span class="val">{fmt_date_ru(b['date'])}</span></div>
+    <div class="row"><span class="lbl">Время</span><span class="val">{b.get('time') or '—'}</span></div>
+    <div class="row"><span class="lbl">Количество вещей</span><span class="val">{b['items']} шт</span></div>
+    <div class="row"><span class="lbl">Имя клиента</span><span class="val">{b['name']}</span></div>
+    <div class="row"><span class="lbl">Телефон</span><span class="val">{b['phone']}</span></div>
+    <div class="row total"><span class="lbl">К оплате</span><span class="val">{b['total']:,} ₽</span></div>
+  </div>
+  <div class="note">Эта страница доступна только при сканировании QR-кода клиента</div>
+</body>
+</html>"""
+
+
+def _not_found_html(bid: str) -> str:
+    return f"""<!DOCTYPE html>
+<html lang="ru"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Не найдено</title>
+<style>body{{font-family:sans-serif;text-align:center;padding:40px 20px;background:#f4f4f5;}}
+.box{{background:white;padding:32px;border-radius:16px;max-width:400px;margin:0 auto;}}
+.icon{{font-size:48px;margin-bottom:12px;}}h1{{font-size:18px;margin-bottom:8px;}}
+p{{color:#888;font-size:14px;}}code{{background:#f0f0f0;padding:2px 8px;border-radius:4px;}}</style>
+</head><body><div class="box"><div class="icon">❌</div><h1>Бронирование не найдено</h1>
+<p>Бронирование <code>{bid}</code> не существует или было удалено.</p></div></body></html>"""
 
 
 # ─────────── ЗАПУСК ───────────
