@@ -625,8 +625,13 @@ function buildSuccess(){
   catch(e){ box.innerHTML='<p style="color:var(--hint);font-size:13px;text-align:center;padding:20px">QR-код сформирован</p>'; }
   busy.add(ST.cell);
 
-  // ── ОТПРАВКА НА СЕРВЕР (для уведомления админу) ──
+  // ── ОТПРАВКА НА СЕРВЕР (для уведомления админу и пользователю) ──
   const phone=document.getElementById('fp')?document.getElementById('fp').value.trim():'';
+  let tgUserId=null, tgUsername=null;
+  if(tg && tg.initDataUnsafe && tg.initDataUnsafe.user){
+    tgUserId = tg.initDataUnsafe.user.id || null;
+    tgUsername = tg.initDataUnsafe.user.username || null;
+  }
   const payload={
     booking_id: bid,
     cell: ST.cell,
@@ -636,7 +641,9 @@ function buildSuccess(){
     items: ST.items,
     name: name,
     phone: phone || null,
-    total: tot
+    total: tot,
+    telegram_user_id: tgUserId,
+    telegram_username: tgUsername
   };
   fetch('/api/booking', {
     method: 'POST',
@@ -646,7 +653,6 @@ function buildSuccess(){
     console.log('Бронь отправлена:', res);
   }).catch(err=>{
     console.error('Ошибка отправки:', err);
-    toast('Бронь сохранена локально');
   });
 
   // ── ОТПРАВКА ДАННЫХ В БОТА через WebApp API ──
