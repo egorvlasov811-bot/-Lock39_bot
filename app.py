@@ -37,9 +37,12 @@ DB_FILE = "bookings.json"
 TOTAL_PLACES = 500
 
 # ─────────── ИНФО О КАМЕРЕ ХРАНЕНИЯ ───────────
-ADDRESS = "г. Зеленоградск, ул. Железнодорожная, 2А корпус 1"
+ADDRESS = "г. Зеленоградск, ул. Железнодорожная, 2Б корп. 1"
 ADDRESS_HINT = "Ориентир: железнодорожный вокзал Зеленоградска"
-MAPS_URL = "https://yandex.ru/maps/?text=Зеленоградск+Железнодорожная+2А+корпус+1"
+MAPS_URL_YANDEX = "https://yandex.ru/maps/org/kamera_khraneniya_bagazha/245433262999"
+MAPS_URL_2GIS = "https://2gis.ru/kaliningrad/geo/70000001101819705"
+# Универсальный URL для кнопки "Карта" (Яндекс по умолчанию — работает в РФ хорошо)
+MAPS_URL = MAPS_URL_YANDEX
 
 # Что считается "местом" (единицей)
 PLACE_EXAMPLES = "чемодан, рюкзак, пакет, велосипед, самокат, коробка, сумка"
@@ -165,7 +168,10 @@ if BOT_TOKEN:
                 web_app=WebAppInfo(url=WEBAPP_URL)
             ))
         ikb.row(InlineKeyboardButton(text="💬 Забронировать в чате", callback_data="start_book"))
-        ikb.row(InlineKeyboardButton(text="📍 Открыть на карте", url=MAPS_URL))
+        ikb.row(
+            InlineKeyboardButton(text="🗺 Яндекс.Карты", url=MAPS_URL_YANDEX),
+            InlineKeyboardButton(text="🗺 2ГИС", url=MAPS_URL_2GIS)
+        )
 
         now = datetime.datetime.now()
         text = (
@@ -188,10 +194,10 @@ if BOT_TOKEN:
             f"💡 *1 место* = {PLACE_EXAMPLES}\n"
             "_Например: 2 чемодана + 1 рюкзак = 3 места_\n\n"
             "━━━━━━━━━━━━━━━━━━\n"
-            "🌙 *Важно про вечернее хранение:*\n"
-            "Если базовый тариф заканчивается, а вещи нужны позже 19:00 — "
-            "автоматически добавляется доплата 100 ₽/час за каждое место. "
-            "Бот сам всё посчитает при бронировании.\n\n"
+            "🌙 *Хранение до позднего вечера — в одной брони!*\n"
+            "Выберите тариф «☀️ Весь день» и укажите время окончания — "
+            "если оно после 19:00, бот сам добавит вечернюю доплату "
+            "(*100 ₽/час за место*). Никаких отдельных бронирований.\n\n"
             "━━━━━━━━━━━━━━━━━━\n"
             "🚀 *Как забронировать:*\n\n"
             "1️⃣ Нажмите *📅 Забронировать* внизу\n"
@@ -200,12 +206,10 @@ if BOT_TOKEN:
             "4️⃣ Покажите его при сдаче вещей\n\n"
             "Управление — *кнопками внизу* 👇"
         )
-        # Сначала reply-клавиатуру
         await message.answer(
             "Меню активировано ✓",
             reply_markup=main_menu_kb()
         )
-        # Затем welcome-пост
         await message.answer(text, parse_mode="Markdown", reply_markup=ikb.as_markup())
 
     # ── Обработчики текстовых кнопок reply-меню ──
@@ -250,7 +254,8 @@ if BOT_TOKEN:
     @dp.message(F.text == "📍 Адрес")
     async def menu_address(message: types.Message):
         ikb = InlineKeyboardBuilder()
-        ikb.row(InlineKeyboardButton(text="🗺 Открыть на карте", url=MAPS_URL))
+        ikb.row(InlineKeyboardButton(text="🗺 Яндекс.Карты", url=MAPS_URL_YANDEX))
+        ikb.row(InlineKeyboardButton(text="🗺 2ГИС", url=MAPS_URL_2GIS))
         await message.answer(
             f"📍 *Адрес камеры хранения*\n"
             f"━━━━━━━━━━━━━━━━━━\n\n"
@@ -258,8 +263,8 @@ if BOT_TOKEN:
             f"📌 {ADDRESS_HINT}\n\n"
             f"🕐 *Режим работы:*\n"
             f"Ежедневно, круглосуточно\n\n"
-            f"📞 *Связаться с нами:*\n"
-            f"Нажмите кнопку «📞 Связаться» внизу — мы получим ваше сообщение",
+            f"⭐ *Найти нас на картах и оставить отзыв:*\n"
+            f"Поможете нам расти 🙏",
             parse_mode="Markdown",
             reply_markup=ikb.as_markup()
         )
@@ -759,6 +764,9 @@ if BOT_TOKEN:
             f"📦 Свободно мест: *{free}* из {TOTAL_PLACES}\n"
             f"{time_hint}\n"
             f"💡 *1 место* = {PLACE_EXAMPLES}\n\n"
+            f"🌙 *Нужно хранение и днём, и вечером?*\n"
+            f"Выберите *☀️ Весь день* — на следующем шаге укажете "
+            f"время окончания (хоть до 23:00). Бот сам посчитает доплату.\n\n"
             f"*Шаг 1:* Выберите тариф 👇",
             parse_mode="Markdown",
             reply_markup=kb.as_markup()
@@ -816,16 +824,24 @@ if BOT_TOKEN:
         # Тариф 3 — спросить, нужна ли доплата за вечер
         if t == "3":
             kb = InlineKeyboardBuilder()
-            kb.row(InlineKeyboardButton(text="✓ До 19:00 — мне хватит", callback_data="bevening:0"))
-            kb.row(InlineKeyboardButton(text="🌙 Нужно до 20:00 (+100 ₽/место)", callback_data="bevening:1"))
-            kb.row(InlineKeyboardButton(text="🌙 Нужно до 21:00 (+200 ₽/место)", callback_data="bevening:2"))
-            kb.row(InlineKeyboardButton(text="🌙 Нужно до 22:00 (+300 ₽/место)", callback_data="bevening:3"))
-            kb.row(InlineKeyboardButton(text="🌙 Нужно до 23:00 (+400 ₽/место)", callback_data="bevening:4"))
+            kb.row(InlineKeyboardButton(text="✓ Только день — до 19:00", callback_data="bevening:0"))
+            kb.row(InlineKeyboardButton(text="🌙 День + до 20:00 (+100 ₽/место)", callback_data="bevening:1"))
+            kb.row(InlineKeyboardButton(text="🌙 День + до 21:00 (+200 ₽/место)", callback_data="bevening:2"))
+            kb.row(InlineKeyboardButton(text="🌙 День + до 22:00 (+300 ₽/место)", callback_data="bevening:3"))
+            kb.row(InlineKeyboardButton(text="🌙 День + до 23:00 (+400 ₽/место)", callback_data="bevening:4"))
             await callback.message.edit_text(
                 f"✓ Тариф: *{tariff_info['name']}*\n\n"
-                f"☀️ Базовый тариф покрывает хранение *с 09:00 до 19:00*.\n\n"
-                f"🌙 *Если нужно дольше:*\n"
-                f"После 19:00 действует вечерняя доплата — *100 ₽/час за каждое место*.\n\n"
+                f"☀️ Базовый «Весь день» = *09:00–19:00*, *300 ₽ за место*.\n\n"
+                f"━━━━━━━━━━━━━━━━━━\n"
+                f"🌙 *Можно продлить до позднего вечера!*\n"
+                f"Не нужно создавать вторую бронь — просто выберите время окончания. "
+                f"К базовой сумме автоматически добавится вечерний тариф "
+                f"(*+100 ₽/час за каждое место* после 19:00).\n\n"
+                f"💡 *Пример:* 2 чемодана с 12:00 до 22:00\n"
+                f"  • День (09–19): 2 × 300 = 600 ₽\n"
+                f"  • Вечер (19–22, 3 ч): 2 × 3 × 100 = 600 ₽\n"
+                f"  • *Итого: 1 200 ₽*\n\n"
+                f"━━━━━━━━━━━━━━━━━━\n"
                 f"До какого времени вам нужно хранение?",
                 parse_mode="Markdown",
                 reply_markup=kb.as_markup()
