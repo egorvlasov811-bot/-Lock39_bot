@@ -624,6 +624,35 @@ function buildSuccess(){
   try{ new QRCode(box,{text:qrData,width:200,height:200,colorDark:'#111111',colorLight:'#ffffff',correctLevel:QRCode.CorrectLevel.M}); }
   catch(e){ box.innerHTML='<p style="color:var(--hint);font-size:13px;text-align:center;padding:20px">QR-код сформирован</p>'; }
   busy.add(ST.cell);
+
+  // ── ОТПРАВКА НА СЕРВЕР (для уведомления админу) ──
+  const phone=document.getElementById('fp')?document.getElementById('fp').value.trim():'';
+  const payload={
+    booking_id: bid,
+    cell: ST.cell,
+    tariff: tariffLabel(),
+    date: date,
+    time: ST.tariff===5 ? null : (time || null),
+    items: ST.items,
+    name: name,
+    phone: phone || null,
+    total: tot
+  };
+  fetch('/api/booking', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(payload)
+  }).then(r=>r.json()).then(res=>{
+    console.log('Бронь отправлена:', res);
+  }).catch(err=>{
+    console.error('Ошибка отправки:', err);
+    toast('Бронь сохранена локально');
+  });
+
+  // ── ОТПРАВКА ДАННЫХ В БОТА через WebApp API ──
+  if(tg && tg.sendData){
+    try { tg.sendData(qrData); } catch(e) { console.error(e); }
+  }
 }
 
 function saveQR(){
