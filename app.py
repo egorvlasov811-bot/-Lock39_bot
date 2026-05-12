@@ -4,6 +4,7 @@
 """
 
 import os
+import io
 import json
 import asyncio
 import datetime
@@ -19,8 +20,10 @@ import uvicorn
 
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart, Command
-from aiogram.types import InlineKeyboardButton, WebAppInfo
+from aiogram.types import InlineKeyboardButton, WebAppInfo, BufferedInputFile
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+
+import qrcode
 
 # ─────────── НАСТРОЙКИ ───────────
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
@@ -43,6 +46,19 @@ def load_db() -> dict:
 def save_db(data: dict):
     with open(DB_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+
+# ─────────── QR ───────────
+
+def make_qr_image(data: str) -> bytes:
+    """Генерация QR-кода как PNG в байтах."""
+    qr = qrcode.QRCode(version=1, error_correction=qrcode.constants.ERROR_CORRECT_M, box_size=10, border=2)
+    qr.add_data(data)
+    qr.make(fit=True)
+    img = qr.make_image(fill_color="black", back_color="white")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+    return buf.getvalue()
 
 # ─────────── BOT ───────────
 
@@ -74,7 +90,7 @@ if BOT_TOKEN:
         if WEBAPP_URL:
             text += "Нажмите кнопку ниже 👇"
         else:
-            text += "⚠️ WEBAPP_URL не настроен. Сообщите администратору."
+            text += "⚠️ WEBAPP_URL не настроен."
         await message.answer(text, parse_mode="Markdown", reply_markup=kb.as_markup() if WEBAPP_URL else None)
 
     @dp.message(Command("help"))
@@ -82,34 +98,56 @@ if BOT_TOKEN:
         await message.answer(
             "ℹ️ *Помощь*\n\n"
             "/start — открыть бронирование\n"
+            "/mybookings — мои бронирования\n"
             "/help — эта справка",
             parse_mode="Markdown"
         )
 
-    @dp.message(F.web_app_data)
-    async def on_web_app_data(message: types.Message):
-        try:
-            data = json.loads(message.web_app_data.data)
-            await message.answer(
-                f"✅ *Бронирование подтверждено!*\n\n"
-                f"🆔 `{data.get('id','—')}`\n"
-                f"📦 Ячейка №{data.get('cell','—')}\n"
-                f"💰 {data.get('tariff','—')}\n"
-                f"💵 К оплате: *{data.get('total',0):,} ₽*\n\n"
-                f"Покажите QR-код при входе.",
-                parse_mode="Markdown"
+    @dp.message(Command("mybookings"))
+    async def cmd_mybookings(message: types.Message):
+        db = load_db()
+        my = [b for b in db.get("bookings", []) if b.get("telegram_user_id") == message.from_user.id]
+        if not my:
+            await message.answer("У вас пока нет активных бронирований.\nЧтобы создать — нажмите /start")
+            return
+        # Последние 5 броней
+        for b in my[-5:]:
+            text = (
+                f"🔐 *Бронирование*\n"
+                f"🆔 `{b['booking_id']}`\n"
+                f"📦 Ячейка №{b['cell']}\n"
+                f"💰 {b['tariff']}\n"
+                f"📅 {b['date']} {b.get('time') or ''}\n"
+                f"🎒 {b['items']} шт\n"
+                f"💵 {b['total']:,} ₽"
             )
-        except Exception:
-            await message.answer("Бронирование получено ✅")
+            await message.answer(text, parse_mode="Markdown")
 
 
-async def notify_admin(booking: dict):
-    """Шлёт сообщение админу о новой брони."""
-    if not bot or not ADMIN_CHAT_ID:
+async def send_user_confirmation(booking: dict):
+    """Шлёт пользователю подтверждение брони с QR-кодом."""
+    if not bot:
+        return
+    user_id = booking.get("telegram_user_id")
+    if not user_id:
+        print("[user_confirm] нет telegram_user_id, пропускаем")
         return
     try:
-        msg = (
-            f"🔐 *Новое бронирование!*\n"
+        qr_data = json.dumps({
+            "id": booking["booking_id"],
+            "cell": booking["cell"],
+            "tariff": booking["tariff"],
+            "date": booking["date"],
+            "time": booking.get("time"),
+            "items": booking["items"],
+            "name": booking["name"],
+            "total": booking["total"]
+        }, ensure_ascii=False)
+
+        qr_bytes = make_qr_image(qr_data)
+
+        caption = (
+            f"✅ *Бронирование подтверждено!*\n"
             f"━━━━━━━━━━━━━━\n"
             f"🆔 `{booking['booking_id']}`\n"
             f"📦 Ячейка: *№{booking['cell']}*\n"
@@ -118,16 +156,50 @@ async def notify_admin(booking: dict):
             f"⏰ Время: {booking.get('time') or '—'}\n"
             f"🎒 Вещей: {booking['items']} шт\n"
             f"👤 Имя: {booking['name']}\n"
+            f"💵 К оплате: *{booking['total']:,} ₽*\n\n"
+            f"📲 *Покажите этот QR-код на стойке* при получении ячейки.\n"
+            f"Сохраните это сообщение или сделайте скриншот."
+        )
+
+        photo = BufferedInputFile(qr_bytes, filename=f"booking_{booking['booking_id']}.png")
+        await bot.send_photo(
+            chat_id=user_id,
+            photo=photo,
+            caption=caption,
+            parse_mode="Markdown"
+        )
+        print(f"[user_confirm] отправлено пользователю {user_id}")
+    except Exception as e:
+        print(f"[user_confirm] ошибка: {e}")
+
+
+async def notify_admin(booking: dict):
+    """Шлёт админу уведомление о новой брони."""
+    if not bot or not ADMIN_CHAT_ID:
+        return
+    try:
+        user_info = ""
+        if booking.get("telegram_username"):
+            user_info = f" (@{booking['telegram_username']})"
+        msg = (
+            f"🔔 *Новое бронирование!*\n"
+            f"━━━━━━━━━━━━━━\n"
+            f"🆔 `{booking['booking_id']}`\n"
+            f"📦 Ячейка: *№{booking['cell']}*\n"
+            f"💰 Тариф: {booking['tariff']}\n"
+            f"📅 Дата: {booking['date']}\n"
+            f"⏰ Время: {booking.get('time') or '—'}\n"
+            f"🎒 Вещей: {booking['items']} шт\n"
+            f"👤 Имя: {booking['name']}{user_info}\n"
             f"📞 Тел.: {booking.get('phone') or '—'}\n"
             f"💵 Итого: *{booking['total']:,} ₽*"
         )
         await bot.send_message(chat_id=int(ADMIN_CHAT_ID), text=msg, parse_mode="Markdown")
     except Exception as e:
-        print(f"[notify_admin] error: {e}")
+        print(f"[admin] error: {e}")
 
 
 async def start_bot():
-    """Polling бота в фоне."""
     if not bot or not dp:
         print("⚠️ BOT_TOKEN не задан — бот не запускается")
         return
@@ -150,16 +222,16 @@ class BookingRequest(BaseModel):
     name: str
     phone: Optional[str] = None
     total: int
+    telegram_user_id: Optional[int] = None
+    telegram_username: Optional[str] = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # старт бота в фоне вместе с сервером
     bot_task = None
     if bot and dp:
         bot_task = asyncio.create_task(start_bot())
     yield
-    # остановка
     if bot_task:
         bot_task.cancel()
         try:
@@ -178,7 +250,7 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 def root():
     if Path("index.html").exists():
         return FileResponse("index.html")
-    return {"status": "ok", "message": "index.html не найден рядом с app.py"}
+    return {"status": "ok"}
 
 
 @app.get("/api/cells")
@@ -203,7 +275,8 @@ async def create_booking(req: BookingRequest):
     booking["status"] = "active"
     db.setdefault("bookings", []).append(booking)
     save_db(db)
-    # уведомление админу
+    # Уведомления в фоне
+    asyncio.create_task(send_user_confirmation(booking))
     asyncio.create_task(notify_admin(booking))
     return {"success": True, "booking_id": req.booking_id}
 
