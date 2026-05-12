@@ -20,8 +20,8 @@ import uvicorn
 
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart, Command
-from aiogram.types import InlineKeyboardButton, WebAppInfo, BufferedInputFile, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
-from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiogram.types import InlineKeyboardButton, WebAppInfo, BufferedInputFile, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, BotCommand
+from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -35,6 +35,14 @@ ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID", "")
 PORT = int(os.getenv("PORT", "8000"))
 DB_FILE = "bookings.json"
 TOTAL_PLACES = 500
+
+# ─────────── ИНФО О КАМЕРЕ ХРАНЕНИЯ ───────────
+ADDRESS = "г. Зеленоградск, ул. Железнодорожная, 2А к1"
+ADDRESS_HINT = "Ориентир: железнодорожный вокзал Зеленоградска"
+MAPS_URL = "https://yandex.ru/maps/?text=Зеленоградск+Железнодорожная+2А+к1"
+
+# Что считается "местом" (единицей)
+PLACE_EXAMPLES = "чемодан, рюкзак, пакет, велосипед, самокат, коробка, сумка"
 
 # ─────────── БАЗА (JSON) ───────────
 
@@ -124,47 +132,321 @@ if BOT_TOKEN:
         phone = State()
         confirm = State()
 
+    # ──────── FSM: связь с админом ────────
+    class ContactFSM(StatesGroup):
+        message = State()
+
+    def main_menu_kb() -> ReplyKeyboardMarkup:
+        """Постоянное меню с кнопками внизу экрана."""
+        kb = ReplyKeyboardBuilder()
+        kb.row(KeyboardButton(text="📅 Забронировать"))
+        kb.row(
+            KeyboardButton(text="📋 Мои брони"),
+            KeyboardButton(text="❌ Отменить бронь")
+        )
+        kb.row(
+            KeyboardButton(text="💰 Тарифы"),
+            KeyboardButton(text="📍 Адрес")
+        )
+        kb.row(
+            KeyboardButton(text="📞 Связаться"),
+            KeyboardButton(text="ℹ️ Помощь")
+        )
+        return kb.as_markup(resize_keyboard=True, persistent=True)
+
     @dp.message(CommandStart())
     async def cmd_start(message: types.Message, state: FSMContext):
         await state.clear()
-        kb = InlineKeyboardBuilder()
+        ikb = InlineKeyboardBuilder()
         if WEBAPP_URL:
-            kb.row(InlineKeyboardButton(
+            ikb.row(InlineKeyboardButton(
                 text="🔐 Открыть мини-приложение",
                 web_app=WebAppInfo(url=WEBAPP_URL)
             ))
-        kb.row(InlineKeyboardButton(text="💬 Забронировать в чате", callback_data="start_book"))
+        ikb.row(InlineKeyboardButton(text="💬 Забронировать в чате", callback_data="start_book"))
+        ikb.row(InlineKeyboardButton(text="📍 Открыть на карте", url=MAPS_URL))
+
         text = (
-            "👋 Добро пожаловать в камеру хранения!\n\n"
-            "Здесь можно забронировать место для вещей.\n\n"
+            "👋 *Камера хранения Зеленоградск*\n\n"
+            f"📍 *Адрес:* {ADDRESS}\n"
+            f"_{ADDRESS_HINT}_\n\n"
+            "━━━━━━━━━━━━━━━━━━\n"
             "🕐 *Тарифы:*\n"
-            "• 1 час — 100 ₽/шт\n"
-            "• 3 часа — 200 ₽/шт\n"
-            "• Весь день (09:00–19:00) — 300 ₽/шт\n"
-            "• После 19:00 — 100 ₽/час\n"
-            "• Суточное — 600 ₽/сут\n\n"
-            "Выберите удобный способ бронирования 👇"
+            "• 1 час — 100 ₽ за место\n"
+            "• 3 часа — 200 ₽ за место\n"
+            "• Весь день (09:00–19:00) — 300 ₽ за место\n"
+            "• После 19:00 — 100 ₽/час за место\n"
+            "• Сутки — 600 ₽ за место\n\n"
+            f"💡 *1 место* = {PLACE_EXAMPLES}\n"
+            "_Один предмет = одно место. Хочешь оставить 3 чемодана — выбираешь 3 места._\n\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            "📲 *Управление:* используйте кнопки внизу экрана 👇\n\n"
+            "Или выберите способ бронирования прямо сейчас:"
         )
-        await message.answer(text, parse_mode="Markdown", reply_markup=kb.as_markup())
+        # Сначала reply-клавиатуру
+        await message.answer(
+            "Меню активировано ✓\nКнопки управления — внизу экрана 👇",
+            reply_markup=main_menu_kb()
+        )
+        # Затем основное сообщение
+        await message.answer(text, parse_mode="Markdown", reply_markup=ikb.as_markup())
+
+    # ── Обработчики текстовых кнопок reply-меню ──
+    @dp.message(F.text == "📅 Забронировать")
+    async def menu_book(message: types.Message, state: FSMContext):
+        await cmd_book(message, state)
+
+    @dp.message(F.text == "📋 Мои брони")
+    async def menu_mybookings(message: types.Message):
+        await cmd_mybookings(message)
+
+    @dp.message(F.text == "❌ Отменить бронь")
+    async def menu_cancel(message: types.Message):
+        await cmd_cancel(message)
+
+    @dp.message(F.text == "💰 Тарифы")
+    async def menu_tariffs(message: types.Message):
+        await message.answer(
+            "💰 *Тарифы камеры хранения*\n"
+            "━━━━━━━━━━━━━━━━━━\n\n"
+            "⏱ *1 час* — 100 ₽ за место\n"
+            "_Быстрое хранение_\n\n"
+            "🕒 *3 часа* — 200 ₽ за место\n"
+            "_Удобно для шопинга или экскурсии_\n\n"
+            "☀️ *Весь день* — 300 ₽ за место\n"
+            "_С 09:00 до 19:00. Самая выгодная цена_\n\n"
+            "🌙 *Вечерний* — 100 ₽/час за место\n"
+            "_Почасово после 19:00_\n\n"
+            "📦 *Сутки* — 600 ₽ за место\n"
+            "_Для длительного хранения, до 14 суток_\n\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            f"💡 *Что значит «1 место»?*\n"
+            f"Это один предмет: {PLACE_EXAMPLES}.\n"
+            "Если у вас несколько предметов — выбирайте соответствующее количество мест.\n\n"
+            "📌 *Лимиты:*\n"
+            "• До 10 мест в одной брони\n"
+            "• Одна активная бронь на аккаунт\n"
+            "• Всего 500 мест в камере",
+            parse_mode="Markdown"
+        )
+
+    @dp.message(F.text == "📍 Адрес")
+    async def menu_address(message: types.Message):
+        ikb = InlineKeyboardBuilder()
+        ikb.row(InlineKeyboardButton(text="🗺 Открыть на карте", url=MAPS_URL))
+        await message.answer(
+            f"📍 *Адрес камеры хранения*\n"
+            f"━━━━━━━━━━━━━━━━━━\n\n"
+            f"*{ADDRESS}*\n\n"
+            f"📌 {ADDRESS_HINT}\n\n"
+            f"🕐 *Режим работы:*\n"
+            f"Ежедневно, круглосуточно\n\n"
+            f"📞 *Связаться с нами:*\n"
+            f"Нажмите кнопку «📞 Связаться» внизу — мы получим ваше сообщение",
+            parse_mode="Markdown",
+            reply_markup=ikb.as_markup()
+        )
+
+    @dp.message(F.text == "📞 Связаться")
+    async def menu_contact(message: types.Message, state: FSMContext):
+        await state.set_state(ContactFSM.message)
+        await message.answer(
+            "📞 *Связь с администрацией*\n\n"
+            "Напишите ваш вопрос одним сообщением — мы ответим в ближайшее время.\n\n"
+            "_Чтобы отменить — нажмите любую кнопку меню._",
+            parse_mode="Markdown"
+        )
+
+    @dp.message(F.text == "ℹ️ Помощь")
+    async def menu_help(message: types.Message):
+        await cmd_help(message)
 
     @dp.callback_query(F.data == "start_book")
     async def cb_start_book(callback: types.CallbackQuery, state: FSMContext):
         """Запустить FSM-бронирование из меню /start."""
         await callback.answer()
-        # Эмулируем команду /book
         await cmd_book(callback.message, state)
+
+    # ──────── /info — показать активную бронь ────────
+    @dp.message(Command("info"))
+    async def cmd_info(message: types.Message):
+        booking = get_active_booking_for_user(message.from_user.id)
+        if not booking:
+            await message.answer(
+                "У вас нет активной брони.\n\n"
+                "Нажмите *📅 Забронировать* внизу, чтобы создать новую.",
+                parse_mode="Markdown"
+            )
+            return
+        await send_user_confirmation(booking)
+
+    # ──────── /contact — связь с админом ────────
+    @dp.message(Command("contact"))
+    async def cmd_contact(message: types.Message, state: FSMContext):
+        await state.set_state(ContactFSM.message)
+        await message.answer(
+            "📞 *Связь с администрацией*\n\n"
+            "Напишите ваш вопрос одним сообщением — мы получим его и ответим.\n\n"
+            "_Чтобы отменить — нажмите любую кнопку меню._",
+            parse_mode="Markdown"
+        )
+
+    @dp.message(ContactFSM.message, F.text & ~F.text.startswith("/"))
+    async def contact_send(message: types.Message, state: FSMContext):
+        # Игнорируем нажатия на кнопки меню — они обработаются своими handler'ами
+        menu_buttons = ["📅 Забронировать", "📋 Мои брони", "❌ Отменить бронь",
+                       "💰 Тарифы", "📍 Адрес", "📞 Связаться", "ℹ️ Помощь"]
+        if message.text in menu_buttons:
+            await state.clear()
+            return
+
+        text = (message.text or "").strip()
+        if not text:
+            await message.answer("Сообщение пустое. Напишите текст:")
+            return
+
+        # Пересылаем админу
+        if ADMIN_CHAT_ID:
+            try:
+                user = message.from_user
+                user_info = f"@{user.username}" if user.username else f"id {user.id}"
+                name = " ".join(filter(None, [user.first_name, user.last_name])) or "—"
+                # Кнопка "Ответить" — открывает чат
+                rkb = InlineKeyboardBuilder()
+                rkb.add(InlineKeyboardButton(
+                    text="💬 Ответить клиенту",
+                    url=f"tg://user?id={user.id}"
+                ))
+                await bot.send_message(
+                    chat_id=int(ADMIN_CHAT_ID),
+                    text=(
+                        f"📩 *Сообщение от клиента*\n"
+                        f"━━━━━━━━━━━━━━\n"
+                        f"👤 {name} ({user_info})\n\n"
+                        f"💬 {text}"
+                    ),
+                    parse_mode="Markdown",
+                    reply_markup=rkb.as_markup()
+                )
+                await message.answer(
+                    "✅ Спасибо! Ваше сообщение отправлено.\n"
+                    "Мы ответим в ближайшее время."
+                )
+            except Exception as e:
+                print(f"[contact] {e}")
+                await message.answer("❌ Не удалось отправить сообщение. Попробуйте позже.")
+        else:
+            await message.answer(
+                "⚠️ Связь с админом временно недоступна.\n"
+                "Попробуйте позже или позвоните по телефону."
+            )
+        await state.clear()
+
+    # ──────── /admin — мини-CRM (только для админа) ────────
+    @dp.message(Command("admin"))
+    async def cmd_admin(message: types.Message):
+        if not ADMIN_CHAT_ID or str(message.from_user.id) != str(ADMIN_CHAT_ID):
+            await message.answer("⛔ Доступ запрещён.")
+            return
+        db = load_db()
+        bookings = db.get("bookings", [])
+        today = datetime.date.today().isoformat()
+        active = [b for b in bookings if b.get("status") == "active"]
+        today_b = [b for b in bookings if b.get("date") == today]
+        cancelled = [b for b in bookings if b.get("status") == "cancelled"]
+        total_revenue = sum(b.get("total", 0) for b in bookings if b.get("status") == "active")
+        occupied = count_active_today()
+
+        text = (
+            f"🔧 *Админ-панель*\n"
+            f"━━━━━━━━━━━━━━━━━━\n\n"
+            f"📊 *Статистика:*\n"
+            f"• Всего броней: {len(bookings)}\n"
+            f"• Активных: {len(active)}\n"
+            f"• На сегодня: {len(today_b)}\n"
+            f"• Отменено: {len(cancelled)}\n\n"
+            f"📦 *Загрузка:*\n"
+            f"• Занято: *{occupied}* из {TOTAL_PLACES}\n"
+            f"• Свободно: *{TOTAL_PLACES - occupied}*\n\n"
+            f"💵 *Выручка (активные):* {total_revenue:,} ₽"
+        )
+        kb = InlineKeyboardBuilder()
+        kb.row(InlineKeyboardButton(text="📋 Активные брони", callback_data="adm:active"))
+        kb.row(InlineKeyboardButton(text="📅 Брони на сегодня", callback_data="adm:today"))
+        await message.answer(text, parse_mode="Markdown", reply_markup=kb.as_markup())
+
+    @dp.callback_query(F.data == "adm:active")
+    async def adm_active(callback: types.CallbackQuery):
+        if not ADMIN_CHAT_ID or str(callback.from_user.id) != str(ADMIN_CHAT_ID):
+            await callback.answer("Доступ запрещён", show_alert=True)
+            return
+        db = load_db()
+        active = [b for b in db.get("bookings", []) if b.get("status") == "active"]
+        if not active:
+            await callback.answer("Активных броней нет", show_alert=True)
+            return
+        for b in active[-10:]:
+            text = (
+                f"🆔 `{b['booking_id']}`\n"
+                f"📦 Место №{b.get('place_num','—')} • {b['items']} шт\n"
+                f"💰 {b['tariff']}\n"
+                f"📅 {fmt_date_ru(b['date'])} {b.get('time') or ''}\n"
+                f"👤 {b['name']} • 📞 {b['phone']}\n"
+                f"💵 {b['total']:,} ₽"
+            )
+            await callback.message.answer(text, parse_mode="Markdown")
+        await callback.answer()
+
+    @dp.callback_query(F.data == "adm:today")
+    async def adm_today(callback: types.CallbackQuery):
+        if not ADMIN_CHAT_ID or str(callback.from_user.id) != str(ADMIN_CHAT_ID):
+            await callback.answer("Доступ запрещён", show_alert=True)
+            return
+        db = load_db()
+        today = datetime.date.today().isoformat()
+        todays = [b for b in db.get("bookings", []) if b.get("date") == today]
+        if not todays:
+            await callback.answer("На сегодня броней нет", show_alert=True)
+            return
+        for b in todays:
+            status = {"active":"✅","cancelled":"❌","completed":"☑️"}.get(b.get("status","active"),"")
+            text = (
+                f"{status} `{b['booking_id']}`\n"
+                f"📦 Место №{b.get('place_num','—')} • {b['items']} шт\n"
+                f"⏰ {b.get('time') or '—'}\n"
+                f"👤 {b['name']} • 📞 {b['phone']}\n"
+                f"💵 {b['total']:,} ₽"
+            )
+            await callback.message.answer(text, parse_mode="Markdown")
+        await callback.answer()
 
     @dp.message(Command("help"))
     async def cmd_help(message: types.Message):
         await message.answer(
-            "ℹ️ *Команды бота*\n\n"
+            "ℹ️ *Справка по боту*\n"
+            "━━━━━━━━━━━━━━━━━━\n\n"
+            f"📍 *Адрес:* {ADDRESS}\n"
+            f"_{ADDRESS_HINT}_\n\n"
+            f"💡 *1 место* = {PLACE_EXAMPLES}\n"
+            "_Например: 2 чемодана + 1 рюкзак = 3 места_\n\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            "📲 *3 способа управления:*\n\n"
+            "*1️⃣ Кнопки внизу экрана* — самый простой\n"
+            "Используйте постоянное меню под полем ввода.\n\n"
+            "*2️⃣ Кнопка «/» слева от поля ввода*\n"
+            "Открывает список всех команд.\n\n"
+            "*3️⃣ Команды вручную:*\n"
             "/start — главное меню\n"
             "/book — забронировать через чат\n"
-            "/mybookings — мои бронирования\n"
+            "/info — посмотреть мою активную бронь\n"
+            "/mybookings — история бронирований\n"
             "/cancel — отменить активную бронь\n"
-            "/help — справка\n\n"
-            "Также можно открыть мини-приложение через кнопку меню снизу.",
-            parse_mode="Markdown"
+            "/contact — написать администрации\n"
+            "/help — эта справка\n\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            "🔐 *Мини-приложение* — открывается через синюю кнопку «Меню» снизу слева или из /start.",
+            parse_mode="Markdown",
+            reply_markup=main_menu_kb()
         )
 
     @dp.message(Command("mybookings"))
@@ -347,9 +629,11 @@ if BOT_TOKEN:
         existing = get_active_booking_for_user(message.from_user.id)
         if existing:
             await message.answer(
-                f"⚠️ У вас уже есть активная бронь:\n"
-                f"🆔 `{existing['booking_id']}`\n\n"
-                f"Сначала отмените её через /cancel, чтобы создать новую.",
+                f"⚠️ *У вас уже есть активная бронь:*\n"
+                f"🆔 `{existing['booking_id']}`\n"
+                f"📦 Мест: {existing.get('items',1)}\n\n"
+                f"Чтобы создать новую — сначала отмените текущую\n"
+                f"(нажмите *❌ Отменить бронь* внизу или /cancel).",
                 parse_mode="Markdown"
             )
             return
@@ -362,17 +646,21 @@ if BOT_TOKEN:
 
         await state.clear()
         kb = InlineKeyboardBuilder()
-        kb.row(InlineKeyboardButton(text="⏱ 1 час — 100 ₽/шт", callback_data="bt:1"))
-        kb.row(InlineKeyboardButton(text="🕒 3 часа — 200 ₽/шт", callback_data="bt:2"))
-        kb.row(InlineKeyboardButton(text="☀️ Весь день — 300 ₽/шт", callback_data="bt:3"))
+        kb.row(InlineKeyboardButton(text="⏱ 1 час — 100 ₽ за место", callback_data="bt:1"))
+        kb.row(InlineKeyboardButton(text="🕒 3 часа — 200 ₽ за место", callback_data="bt:2"))
+        kb.row(InlineKeyboardButton(text="☀️ Весь день — 300 ₽ за место", callback_data="bt:3"))
         kb.row(InlineKeyboardButton(text="🌙 Вечерний — 100 ₽/час", callback_data="bt:4"))
-        kb.row(InlineKeyboardButton(text="📦 Суточное — 600 ₽/сут", callback_data="bt:5"))
+        kb.row(InlineKeyboardButton(text="📦 Сутки — 600 ₽ за место", callback_data="bt:5"))
         kb.row(InlineKeyboardButton(text="❌ Отмена", callback_data="bt:cancel"))
 
         await message.answer(
-            f"🔐 *Новое бронирование*\n\n"
-            f"Свободно мест: *{free}* из {TOTAL_PLACES}\n\n"
-            f"Выберите тариф 👇",
+            f"🔐 *Новое бронирование*\n"
+            f"━━━━━━━━━━━━━━━━━━\n\n"
+            f"📍 {ADDRESS}\n"
+            f"_{ADDRESS_HINT}_\n\n"
+            f"📦 Свободно мест: *{free}* из {TOTAL_PLACES}\n\n"
+            f"💡 *1 место* = {PLACE_EXAMPLES}\n\n"
+            f"*Шаг 1 из 5:* Выберите тариф 👇",
             parse_mode="Markdown",
             reply_markup=kb.as_markup()
         )
@@ -518,7 +806,11 @@ if BOT_TOKEN:
         )
         if data.get("time"):
             text += f"\n✓ Время: *{data['time']}*"
-        text += "\n\nСколько мест нужно? (до 10)"
+        text += (
+            f"\n\n*Сколько мест нужно?* _(до 10)_\n\n"
+            f"💡 *1 место* = {PLACE_EXAMPLES}\n"
+            f"_Например: 2 чемодана и рюкзак = 3 места_"
+        )
         if edit:
             await message.edit_text(text, parse_mode="Markdown", reply_markup=kb.as_markup())
         else:
@@ -762,10 +1054,31 @@ async def notify_admin(booking: dict):
         print(f"[admin] {e}")
 
 
+async def set_bot_commands():
+    """Регистрируем нативное меню команд (кнопка '/' слева от поля ввода)."""
+    if not bot:
+        return
+    commands = [
+        BotCommand(command="start", description="🏠 Главное меню"),
+        BotCommand(command="book", description="📅 Забронировать место"),
+        BotCommand(command="info", description="🎫 Моя активная бронь + QR"),
+        BotCommand(command="mybookings", description="📋 История бронирований"),
+        BotCommand(command="cancel", description="❌ Отменить активную бронь"),
+        BotCommand(command="contact", description="📞 Связаться с администрацией"),
+        BotCommand(command="help", description="ℹ️ Помощь и список команд"),
+    ]
+    try:
+        await bot.set_my_commands(commands)
+        print("📋 Меню команд зарегистрировано")
+    except Exception as e:
+        print(f"[set_commands] {e}")
+
+
 async def start_bot():
     if not bot or not dp:
         return
     print("🤖 Bot polling запущен")
+    await set_bot_commands()
     try:
         await dp.start_polling(bot)
     except Exception as e:
