@@ -37,9 +37,9 @@ DB_FILE = "bookings.json"
 TOTAL_PLACES = 500
 
 # ─────────── ИНФО О КАМЕРЕ ХРАНЕНИЯ ───────────
-ADDRESS = "г. Зеленоградск, ул. Железнодорожная, 2А к1"
+ADDRESS = "г. Зеленоградск, ул. Железнодорожная, 2А корпус 1"
 ADDRESS_HINT = "Ориентир: железнодорожный вокзал Зеленоградска"
-MAPS_URL = "https://yandex.ru/maps/?text=Зеленоградск+Железнодорожная+2А+к1"
+MAPS_URL = "https://yandex.ru/maps/?text=Зеленоградск+Железнодорожная+2А+корпус+1"
 
 # Что считается "местом" (единицей)
 PLACE_EXAMPLES = "чемодан, рюкзак, пакет, велосипед, самокат, коробка, сумка"
@@ -125,6 +125,7 @@ if BOT_TOKEN:
         tariff = State()
         hours = State()
         days = State()
+        evening = State()
         date = State()
         time = State()
         items = State()
@@ -166,29 +167,45 @@ if BOT_TOKEN:
         ikb.row(InlineKeyboardButton(text="💬 Забронировать в чате", callback_data="start_book"))
         ikb.row(InlineKeyboardButton(text="📍 Открыть на карте", url=MAPS_URL))
 
+        now = datetime.datetime.now()
         text = (
-            "👋 *Камера хранения Зеленоградск*\n\n"
-            f"📍 *Адрес:* {ADDRESS}\n"
+            "👋 *Добро пожаловать в камеру хранения Зеленоградска!*\n\n"
+            "Оставьте багаж под надёжным присмотром, пока гуляете по городу или ждёте поезд. "
+            "Чемоданы, рюкзаки, велосипеды — поможем сохранить всё.\n\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            f"📍 *Адрес:*\n{ADDRESS}\n"
             f"_{ADDRESS_HINT}_\n\n"
+            f"🕐 *Режим работы:* круглосуточно, без выходных\n"
+            f"📦 *Вместимость:* 500 мест\n"
+            f"🔒 *Охрана:* видеонаблюдение 24/7\n\n"
             "━━━━━━━━━━━━━━━━━━\n"
-            "🕐 *Тарифы:*\n"
-            "• 1 час — 100 ₽ за место\n"
-            "• 3 часа — 200 ₽ за место\n"
-            "• Весь день (09:00–19:00) — 300 ₽ за место\n"
-            "• После 19:00 — 100 ₽/час за место\n"
-            "• Сутки — 600 ₽ за место\n\n"
+            "💰 *Наши тарифы:*\n\n"
+            "⏱ 1 час — *100 ₽* за место\n"
+            "🕒 3 часа — *200 ₽* за место\n"
+            "☀️ Весь день (09:00–19:00) — *300 ₽* за место\n"
+            "🌙 После 19:00 — *100 ₽/час* за место\n"
+            "📦 Сутки — *600 ₽* за место\n\n"
             f"💡 *1 место* = {PLACE_EXAMPLES}\n"
-            "_Один предмет = одно место. Хочешь оставить 3 чемодана — выбираешь 3 места._\n\n"
+            "_Например: 2 чемодана + 1 рюкзак = 3 места_\n\n"
             "━━━━━━━━━━━━━━━━━━\n"
-            "📲 *Управление:* используйте кнопки внизу экрана 👇\n\n"
-            "Или выберите способ бронирования прямо сейчас:"
+            "🌙 *Важно про вечернее хранение:*\n"
+            "Если базовый тариф заканчивается, а вещи нужны позже 19:00 — "
+            "автоматически добавляется доплата 100 ₽/час за каждое место. "
+            "Бот сам всё посчитает при бронировании.\n\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            "🚀 *Как забронировать:*\n\n"
+            "1️⃣ Нажмите *📅 Забронировать* внизу\n"
+            "2️⃣ Выберите тариф и количество мест\n"
+            "3️⃣ Получите QR-код в чат\n"
+            "4️⃣ Покажите его при сдаче вещей\n\n"
+            "Управление — *кнопками внизу* 👇"
         )
         # Сначала reply-клавиатуру
         await message.answer(
-            "Меню активировано ✓\nКнопки управления — внизу экрана 👇",
+            "Меню активировано ✓",
             reply_markup=main_menu_kb()
         )
-        # Затем основное сообщение
+        # Затем welcome-пост
         await message.answer(text, parse_mode="Markdown", reply_markup=ikb.as_markup())
 
     # ── Обработчики текстовых кнопок reply-меню ──
@@ -597,14 +614,46 @@ if BOT_TOKEN:
     # ════════════════════════════════════════
 
     TARIFFS_BOT = {
-        "1": {"name": "1 час — 100 ₽/шт", "price_per_item": 100, "needs_time": True},
-        "2": {"name": "3 часа — 200 ₽/шт", "price_per_item": 200, "needs_time": True},
-        "3": {"name": "Весь день (09:00–19:00) — 300 ₽/шт", "price_per_item": 300, "needs_time": False},
-        "4": {"name": "Вечерний (после 19:00) — 100 ₽/час", "price_per_item": 100, "needs_time": True, "needs_hours": True},
-        "5": {"name": "Суточное — 600 ₽/сут", "price_per_item": 600, "needs_time": False, "needs_days": True},
+        "1": {"name": "1 час — 100 ₽/место", "price_per_item": 100, "needs_time": True, "hours_duration": 1},
+        "2": {"name": "3 часа — 200 ₽/место", "price_per_item": 200, "needs_time": True, "hours_duration": 3},
+        "3": {"name": "Весь день (09:00–19:00) — 300 ₽/место", "price_per_item": 300, "needs_time": False, "fixed_window": (9, 19)},
+        "4": {"name": "Вечерний (после 19:00) — 100 ₽/час", "price_per_item": 100, "needs_time": True, "needs_hours": True, "evening_only": True},
+        "5": {"name": "Сутки — 600 ₽/место", "price_per_item": 600, "needs_time": False, "needs_days": True},
     }
 
+    # ⏰ ВЕЧЕРНЕЕ ОКНО — после 19:00 каждый час по 100 ₽/место
+    EVENING_START = 19  # час, с которого начинается вечерний тариф
+
+    def get_available_tariffs(now: datetime.datetime = None) -> list:
+        """
+        Возвращает список доступных тарифов на сегодня с учётом текущего времени.
+        Логика:
+        - Тариф 1 (1 час): доступен только если до 19:00 осталось хотя бы 1 час
+        - Тариф 2 (3 часа): доступен только если до 19:00 осталось хотя бы 3 часа (или если хочется до вечера)
+        - Тариф 3 (весь день): доступен только если сейчас < 19:00 (можно начать)
+        - Тариф 4 (вечерний): доступен в любое время (для брони на вечер)
+        - Тариф 5 (сутки): всегда доступен
+        """
+        if now is None:
+            now = datetime.datetime.now()
+        h = now.hour
+        available = []
+        # Тариф 1 — нужен хотя бы 1 час до 19:00 (либо брать на завтра)
+        # На сегодня доступен если сейчас < 18:00, иначе только на завтра/вечер
+        available.append("1")
+        # Тариф 2 — 3 часа подряд
+        available.append("2")
+        # Тариф 3 — весь день. Логичен только если ещё ДЕНЬ (до 19:00)
+        if h < 19:
+            available.append("3")
+        # Тариф 4 — вечерний, всегда есть
+        available.append("4")
+        # Тариф 5 — сутки, всегда
+        available.append("5")
+        return available
+
     def calc_booking_total(data: dict) -> int:
+        """Базовая сумма по выбранному тарифу."""
         t = data["tariff"]
         items = data["items"]
         price = TARIFFS_BOT[t]["price_per_item"]
@@ -614,18 +663,42 @@ if BOT_TOKEN:
             return price * data.get("days", 1) * items
         return price * items
 
+    def calc_evening_extra(data: dict) -> int:
+        """
+        Доплата за хранение после 19:00 для тарифов 1/2/3.
+        Считаем: end_time = start_time + длительность тарифа.
+        Если end_time > 19:00 — доплата по 100 ₽/час/место за каждый час сверх 19:00.
+        Для тарифа 3 (весь день) считаем end = до желаемого времени окончания.
+        """
+        t = data["tariff"]
+        if t in ("4", "5"):
+            return 0  # вечерний/суточный — без доплаты
+        items = data["items"]
+        # extra_hours указано в data?
+        extra_hours = data.get("evening_extra_hours", 0)
+        return 100 * extra_hours * items
+
+    def calc_full_total(data: dict) -> int:
+        """Полная сумма с учётом возможной вечерней доплаты."""
+        return calc_booking_total(data) + calc_evening_extra(data)
+
     def tariff_label_bot(data: dict) -> str:
         t = data["tariff"]
         if t == "4":
             return f"Вечерний, {data.get('hours',1)} ч × 100 ₽"
         if t == "5":
-            return f"Суточное, {data.get('days',1)} сут × 600 ₽"
+            return f"Сутки, {data.get('days',1)} сут × 600 ₽"
+        if t == "3":
+            extra = data.get("evening_extra_hours", 0)
+            if extra > 0:
+                end_time = 19 + extra
+                return f"Весь день до {end_time}:00 (с вечерней доплатой)"
+            return TARIFFS_BOT[t]["name"]
         return TARIFFS_BOT[t]["name"]
 
     @dp.message(Command("book"))
     async def cmd_book(message: types.Message, state: FSMContext):
         """Начало бронирования через чат."""
-        # Проверка: нет ли уже активной брони
         existing = get_active_booking_for_user(message.from_user.id)
         if existing:
             await message.answer(
@@ -638,29 +711,55 @@ if BOT_TOKEN:
             )
             return
 
-        # Проверка свободных мест
         free = TOTAL_PLACES - count_active_today()
         if free <= 0:
             await message.answer("😔 К сожалению, все места заняты. Попробуйте позже.")
             return
 
         await state.clear()
+        now = datetime.datetime.now()
+        available = get_available_tariffs(now)
+
+        # Создаём кнопки только доступных тарифов
         kb = InlineKeyboardBuilder()
-        kb.row(InlineKeyboardButton(text="⏱ 1 час — 100 ₽ за место", callback_data="bt:1"))
-        kb.row(InlineKeyboardButton(text="🕒 3 часа — 200 ₽ за место", callback_data="bt:2"))
-        kb.row(InlineKeyboardButton(text="☀️ Весь день — 300 ₽ за место", callback_data="bt:3"))
-        kb.row(InlineKeyboardButton(text="🌙 Вечерний — 100 ₽/час", callback_data="bt:4"))
-        kb.row(InlineKeyboardButton(text="📦 Сутки — 600 ₽ за место", callback_data="bt:5"))
+        tariff_buttons = {
+            "1": "⏱ 1 час — 100 ₽ за место",
+            "2": "🕒 3 часа — 200 ₽ за место",
+            "3": "☀️ Весь день — 300 ₽ за место",
+            "4": "🌙 Вечерний — 100 ₽/час за место",
+            "5": "📦 Сутки — 600 ₽ за место",
+        }
+        for t_id in ["1", "2", "3", "4", "5"]:
+            if t_id in available:
+                kb.row(InlineKeyboardButton(text=tariff_buttons[t_id], callback_data=f"bt:{t_id}"))
         kb.row(InlineKeyboardButton(text="❌ Отмена", callback_data="bt:cancel"))
+
+        # Подсказка про вечернее время
+        time_hint = ""
+        if now.hour >= 19:
+            time_hint = (
+                f"\n🌙 *Сейчас уже вечер* ({now.strftime('%H:%M')}).\n"
+                f"Тариф «Весь день» недоступен — используйте *🌙 Вечерний* "
+                f"или *📦 Сутки*.\n"
+            )
+        elif now.hour >= 16:
+            hours_left = 19 - now.hour
+            time_hint = (
+                f"\n⏰ *До 19:00 осталось ~{hours_left} ч.*\n"
+                f"Если хранение нужно дольше — выбирайте тариф «Весь день» "
+                f"(*с авто-доплатой 100 ₽/час* после 19:00) или «Сутки».\n"
+            )
 
         await message.answer(
             f"🔐 *Новое бронирование*\n"
             f"━━━━━━━━━━━━━━━━━━\n\n"
             f"📍 {ADDRESS}\n"
             f"_{ADDRESS_HINT}_\n\n"
-            f"📦 Свободно мест: *{free}* из {TOTAL_PLACES}\n\n"
+            f"🕐 Сейчас: *{now.strftime('%H:%M')}*\n"
+            f"📦 Свободно мест: *{free}* из {TOTAL_PLACES}\n"
+            f"{time_hint}\n"
             f"💡 *1 место* = {PLACE_EXAMPLES}\n\n"
-            f"*Шаг 1 из 5:* Выберите тариф 👇",
+            f"*Шаг 1:* Выберите тариф 👇",
             parse_mode="Markdown",
             reply_markup=kb.as_markup()
         )
@@ -690,7 +789,9 @@ if BOT_TOKEN:
             kb.adjust(3)
             await callback.message.edit_text(
                 f"✓ Тариф: *{tariff_info['name']}*\n\n"
-                f"Сколько часов хранения после 19:00?",
+                f"🌙 *Вечерний тариф работает с 19:00*\n"
+                f"_Стоимость: 100 ₽/час за каждое место_\n\n"
+                f"Сколько часов хранения нужно?",
                 parse_mode="Markdown",
                 reply_markup=kb.as_markup()
             )
@@ -712,8 +813,37 @@ if BOT_TOKEN:
             await state.set_state(BookFSM.days)
             return
 
+        # Тариф 3 — спросить, нужна ли доплата за вечер
+        if t == "3":
+            kb = InlineKeyboardBuilder()
+            kb.row(InlineKeyboardButton(text="✓ До 19:00 — мне хватит", callback_data="bevening:0"))
+            kb.row(InlineKeyboardButton(text="🌙 Нужно до 20:00 (+100 ₽/место)", callback_data="bevening:1"))
+            kb.row(InlineKeyboardButton(text="🌙 Нужно до 21:00 (+200 ₽/место)", callback_data="bevening:2"))
+            kb.row(InlineKeyboardButton(text="🌙 Нужно до 22:00 (+300 ₽/место)", callback_data="bevening:3"))
+            kb.row(InlineKeyboardButton(text="🌙 Нужно до 23:00 (+400 ₽/место)", callback_data="bevening:4"))
+            await callback.message.edit_text(
+                f"✓ Тариф: *{tariff_info['name']}*\n\n"
+                f"☀️ Базовый тариф покрывает хранение *с 09:00 до 19:00*.\n\n"
+                f"🌙 *Если нужно дольше:*\n"
+                f"После 19:00 действует вечерняя доплата — *100 ₽/час за каждое место*.\n\n"
+                f"До какого времени вам нужно хранение?",
+                parse_mode="Markdown",
+                reply_markup=kb.as_markup()
+            )
+            await state.set_state(BookFSM.evening)
+            return
+
         # Иначе — сразу к дате
         await ask_date(callback.message, state, edit=True, tariff_name=tariff_info['name'])
+
+    @dp.callback_query(BookFSM.evening, F.data.startswith("bevening:"))
+    async def bt_evening(callback: types.CallbackQuery, state: FSMContext):
+        """Выбор доплаты за вечер для тарифа «Весь день»."""
+        extra_hours = int(callback.data.split(":")[1])
+        await state.update_data(evening_extra_hours=extra_hours)
+        await callback.answer()
+        data = await state.get_data()
+        await ask_date(callback.message, state, edit=True, tariff_name=tariff_label_bot(data))
 
     @dp.callback_query(BookFSM.hours, F.data.startswith("bh:"))
     async def bt_hours(callback: types.CallbackQuery, state: FSMContext):
@@ -887,10 +1017,21 @@ if BOT_TOKEN:
             return
         await state.update_data(phone=phone)
 
-        # Показываем сводку и кнопки подтверждения
+        # Считаем полную сумму с учётом вечерней доплаты
         data = await state.get_data()
-        total = calc_booking_total(data)
-        await state.update_data(total=total)
+        base = calc_booking_total(data)
+        extra = calc_evening_extra(data)
+        total = base + extra
+        await state.update_data(total=total, base_price=base, evening_extra=extra)
+
+        # Формируем разбивку цены
+        price_lines = []
+        if extra > 0:
+            extra_hours = data.get("evening_extra_hours", 0)
+            end_time = 19 + extra_hours
+            price_lines.append(f"  • Базовый тариф (09:00–19:00): *{base:,} ₽*")
+            price_lines.append(f"  • Доплата за вечер (19:00–{end_time}:00, {extra_hours} ч × 100 ₽ × {data['items']} мест): *{extra:,} ₽*")
+        price_breakdown = "\n".join(price_lines)
 
         text = (
             f"📋 *Проверьте данные брони*\n"
@@ -901,9 +1042,11 @@ if BOT_TOKEN:
             f"🎒 Мест: {data['items']} шт\n"
             f"👤 Имя: {data['name']}\n"
             f"📞 Тел.: {phone}\n"
-            f"💵 Итого: *{total:,} ₽*\n\n"
-            f"Всё верно?"
         )
+        if price_breakdown:
+            text += f"\n💵 *Расчёт цены:*\n{price_breakdown}\n"
+        text += f"\n💳 *Итого: {total:,} ₽*\n\nВсё верно?"
+
         kb = InlineKeyboardBuilder()
         kb.row(
             InlineKeyboardButton(text="✅ Подтвердить", callback_data="bconfirm:yes"),
@@ -959,6 +1102,9 @@ if BOT_TOKEN:
             "name": data["name"],
             "phone": data["phone"],
             "total": data["total"],
+            "base_price": data.get("base_price", data["total"]),
+            "evening_extra": data.get("evening_extra", 0),
+            "evening_extra_hours": data.get("evening_extra_hours", 0),
             "telegram_user_id": callback.from_user.id,
             "telegram_username": callback.from_user.username,
             "created_at": now.isoformat(),
