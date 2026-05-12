@@ -131,56 +131,55 @@ body {
   padding: 8px 4px;
 }
 
-/* CELLS */
-.cells-meta {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 12px 16px 6px;
+/* AVAILABILITY (новый экран) */
+.avail-card {
+  background: var(--secondary);
+  border-radius: var(--r);
+  padding: 24px 18px;
+  margin: 16px;
+  text-align: center;
 }
-.legend { display: flex; gap: 10px; flex-wrap: wrap; }
-.leg {
-  display: flex; align-items: center; gap: 4px;
-  font-size: 11px; color: var(--hint);
-}
-.ldot { width: 11px; height: 11px; border-radius: 3px; }
-.cells-grid {
-  display: grid;
-  grid-template-columns: repeat(10, 1fr);
-  gap: 4px;
-  padding: 0 16px 4px;
-}
-.cell {
-  aspect-ratio: 1;
-  border-radius: 5px;
-  border: 1.5px solid rgba(128,128,128,0.14);
-  display: flex; align-items: center; justify-content: center;
-  font-size: 9px; font-weight: 700;
-  cursor: pointer; transition: all .14s;
-  background: var(--bg); color: var(--text);
-}
-.cell:active { transform: scale(.92); }
-.cell.busy {
-  background: var(--danger-bg);
-  border-color: rgba(239,68,68,0.28);
-  color: var(--danger); cursor: not-allowed;
-}
-.cell.sel {
-  background: var(--accent); border-color: var(--accent);
-  color: white; transform: scale(1.10);
-  box-shadow: 0 3px 10px rgba(38,120,182,.35);
-}
-.cell-chosen {
-  display: none; align-items: center; justify-content: space-between;
+.avail-icon {
+  width: 64px; height: 64px; border-radius: 50%;
   background: var(--accent-light);
-  border: 1px solid rgba(38,120,182,0.22);
-  border-radius: var(--rs); padding: 10px 14px;
-  margin: 8px 16px 4px; font-size: 13px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 30px; margin: 0 auto 14px;
 }
-.cell-chosen.vis { display: flex; }
-.clr { font-size: 12px; color: var(--hint); cursor: pointer; text-decoration: underline; }
+.avail-label { font-size: 13px; color: var(--hint); margin-bottom: 6px; }
+.avail-count {
+  font-size: 38px; font-weight: 700; color: var(--accent);
+  margin-bottom: 4px;
+}
+.avail-total { font-size: 14px; color: var(--hint); }
+.progress-bar {
+  margin-top: 18px;
+  height: 8px;
+  background: rgba(128,128,128,0.15);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #22c55e 0%, var(--accent) 100%);
+  border-radius: 4px;
+  transition: width .4s ease;
+}
+.avail-status {
+  margin-top: 14px;
+  font-size: 13px;
+  padding: 8px 14px;
+  border-radius: 20px;
+  display: inline-block;
+  font-weight: 500;
+}
+.avail-status.ok { background: #dcfce7; color: #166534; }
+.avail-status.busy { background: #fef3c7; color: #92400e; }
+.avail-status.full { background: var(--danger-bg); color: var(--danger); }
 
 /* FORM */
 .field { margin-bottom: 11px; }
 .flabel { font-size: 12px; font-weight: 600; color: var(--hint); margin-bottom: 5px; display: block; }
+.flabel .req { color: var(--danger); }
 .field input, .field select {
   width: 100%; padding: 11px 13px;
   border: 1.5px solid rgba(128,128,128,0.18);
@@ -190,6 +189,7 @@ body {
   -webkit-appearance: none; appearance: none;
 }
 .field input:focus, .field select:focus { border-color: var(--accent); }
+.field input.err { border-color: var(--danger); }
 .frow { display: flex; gap: 10px; }
 .frow .field { flex: 1; }
 .icounter {
@@ -242,7 +242,7 @@ body {
 .bcode { text-align: center; font-size: 19px; font-weight: 700; letter-spacing: 1px; color: var(--accent); margin-bottom: 22px; }
 #qrbox { display: flex; justify-content: center; margin-bottom: 14px; }
 #qrbox canvas, #qrbox img { border-radius: 12px; border: 4px solid white; box-shadow: 0 4px 18px rgba(0,0,0,.1); }
-.qrhint { text-align: center; font-size: 12px; color: var(--hint); margin-bottom: 18px; }
+.qrhint { text-align: center; font-size: 12px; color: var(--hint); margin-bottom: 18px; padding: 0 24px; }
 .detail-card {
   background: var(--secondary); border-radius: var(--r);
   padding: 13px 14px; margin: 0 16px 14px;
@@ -369,20 +369,20 @@ body {
   </div>
 </div>
 
-<!-- ══ SCREEN 2: ЯЧЕЙКА ══ -->
+<!-- ══ SCREEN 2: НАЛИЧИЕ МЕСТ ══ -->
 <div class="screen" id="s1">
-  <div class="cells-meta">
-    <div class="slabel" style="margin:0">100 ячеек</div>
-    <div class="legend">
-      <div class="leg"><div class="ldot" style="background:var(--bg);border:1.5px solid rgba(128,128,128,.2)"></div>Свободна</div>
-      <div class="leg"><div class="ldot" style="background:var(--danger-bg);border:1.5px solid rgba(239,68,68,.3)"></div>Занята</div>
-      <div class="leg"><div class="ldot" style="background:var(--accent)"></div>Выбрана</div>
+  <div class="avail-card">
+    <div class="avail-icon">📦</div>
+    <div class="avail-label">Свободно мест</div>
+    <div class="avail-count" id="freecount">500</div>
+    <div class="avail-total">из 500 доступных</div>
+    <div class="progress-bar">
+      <div class="progress-fill" id="progfill" style="width:100%"></div>
     </div>
+    <div class="avail-status ok" id="avstat">✓ Места есть</div>
   </div>
-  <div class="cells-grid" id="cgrid"></div>
-  <div class="cell-chosen" id="cchosen">
-    <span id="ctext">Ячейка не выбрана</span>
-    <span class="clr" onclick="clearCell()">Сбросить</span>
+  <div style="padding:0 16px;font-size:13px;color:var(--hint);text-align:center;line-height:1.5;">
+    Место будет автоматически назначено<br>после подтверждения брони
   </div>
 </div>
 
@@ -392,18 +392,18 @@ body {
     <div class="slabel">Данные</div>
 
     <div class="field">
-      <label class="flabel">Имя</label>
+      <label class="flabel">Имя <span class="req">*</span></label>
       <input type="text" id="fn" placeholder="Ваше имя" maxlength="60" oninput="updSum()">
     </div>
 
     <div class="field">
-      <label class="flabel">Телефон (необязательно)</label>
-      <input type="tel" id="fp" placeholder="+7 (___) ___-__-__">
+      <label class="flabel">Телефон <span class="req">*</span></label>
+      <input type="tel" id="fp" placeholder="+7 (___) ___-__-__" inputmode="tel">
     </div>
 
     <div class="frow">
       <div class="field">
-        <label class="flabel">Дата</label>
+        <label class="flabel">Дата <span class="req">*</span></label>
         <input type="date" id="fd" onchange="updSum()">
       </div>
       <div class="field" id="timefield">
@@ -413,7 +413,7 @@ body {
     </div>
 
     <div class="field">
-      <label class="flabel">Количество вещей</label>
+      <label class="flabel">Количество мест <span style="color:var(--hint);font-weight:400;">(до 10)</span></label>
       <div class="icounter">
         <button class="cbtn" onclick="chItems(-1)">−</button>
         <div class="cval" id="ival">1</div>
@@ -424,7 +424,6 @@ body {
 
   <div class="sum-card">
     <div class="srow"><span>Тариф</span><span id="ss-t">—</span></div>
-    <div class="srow"><span>Ячейка</span><span id="ss-c">—</span></div>
     <div class="srow"><span>Вещей</span><span id="ss-i">1 шт</span></div>
     <div class="srow"><span>Дата / время</span><span id="ss-d">—</span></div>
     <div class="srow stotal"><span>Итого</span><span id="ss-tot">0 ₽</span></div>
@@ -439,14 +438,14 @@ body {
   <div class="bnum">Номер бронирования</div>
   <div class="bcode" id="bcode"></div>
   <div id="qrbox"></div>
-  <div class="qrhint">Сканируйте на стойке или покажите сотруднику</div>
+  <div class="qrhint">Сотрудник отсканирует QR-код любым смартфоном — откроется ваша запись</div>
   <div class="detail-card">
-    <div class="drow"><span>Ячейка</span><span id="rc"></span></div>
     <div class="drow"><span>Тариф</span><span id="rt"></span></div>
     <div class="drow"><span>Дата</span><span id="rd"></span></div>
     <div class="drow"><span>Время</span><span id="rti"></span></div>
     <div class="drow"><span>Вещей</span><span id="ri"></span></div>
     <div class="drow"><span>Имя</span><span id="rn"></span></div>
+    <div class="drow"><span>Телефон</span><span id="rph"></span></div>
     <div class="drow"><span>К оплате</span><span id="rtot" style="color:var(--accent);font-weight:700"></span></div>
   </div>
   <div class="abts">
@@ -461,24 +460,70 @@ body {
 const tg = window.Telegram && window.Telegram.WebApp;
 if (tg) { tg.ready(); tg.expand(); }
 
-const ST = { tariff:null, hours:1, days:1, cell:null, items:1, step:0 };
+const TOTAL_PLACES = 500;
+const ST = { tariff:null, hours:1, days:1, items:1, step:0 };
+let freePlaces = TOTAL_PLACES;
+let assignedNum = null;
 
-// busy cells simulation
-const busy = new Set();
-(()=>{ const a=[...Array(100)].map((_,i)=>i+1).sort(()=>Math.random()-.5); a.slice(0,24).forEach(n=>busy.add(n)); })();
+// Подгрузить свободные места + проверить активную бронь юзера
+let userHasActive = false;
+let userActiveBid = null;
+function loadAvailability(){
+  let url = '/api/availability';
+  if(tg && tg.initDataUnsafe && tg.initDataUnsafe.user && tg.initDataUnsafe.user.id){
+    url += '?user_id=' + tg.initDataUnsafe.user.id;
+  }
+  fetch(url).then(r=>r.json()).then(d=>{
+    if(d && typeof d.free === 'number'){
+      freePlaces = d.free;
+      updAvailability();
+    }
+    if(d && d.has_active){
+      userHasActive = true;
+      userActiveBid = d.active_booking_id;
+      showActiveBookingNotice(d);
+    }
+  }).catch(()=>{});
+}
+loadAvailability();
 
-// BUILD CELLS
-function buildCells(){
-  const g=document.getElementById('cgrid'); g.innerHTML='';
-  for(let i=1;i<=100;i++){
-    const d=document.createElement('div');
-    d.className='cell'+(busy.has(i)?' busy':'');
-    d.id='cl'+i; d.textContent=i;
-    if(!busy.has(i)) d.onclick=()=>selCell(i);
-    g.appendChild(d);
+function showActiveBookingNotice(d){
+  // Блокируем главную кнопку и показываем сообщение
+  const mb = document.getElementById('mbtn');
+  mb.disabled = true;
+  mb.textContent = '⚠ У вас уже есть бронь';
+
+  const items = d.active_items || 1;
+  // Показываем баннер вверху первого экрана
+  const s0 = document.getElementById('s0');
+  let banner = document.getElementById('active-banner');
+  if(!banner){
+    banner = document.createElement('div');
+    banner.id = 'active-banner';
+    banner.style.cssText = 'margin:14px 16px;padding:14px;background:#fef3c7;border:1px solid #fde68a;border-radius:12px;font-size:13px;color:#92400e;line-height:1.5;';
+    banner.innerHTML = `
+      <div style="font-weight:700;font-size:14px;margin-bottom:6px;">⚠️ У вас уже есть активная бронь</div>
+      <div>Номер: <code style="background:rgba(0,0,0,0.05);padding:2px 6px;border-radius:4px;">${d.active_booking_id}</code></div>
+      <div style="margin-top:4px;">Мест в брони: ${items}</div>
+      <div style="margin-top:8px;font-size:12px;">Дождитесь окончания текущей брони, чтобы создать новую. Подтверждение брони — в чате с ботом.</div>
+    `;
+    s0.insertBefore(banner, s0.firstChild);
   }
 }
-buildCells();
+
+function updAvailability(){
+  const cnt = document.getElementById('freecount');
+  const fill = document.getElementById('progfill');
+  const stat = document.getElementById('avstat');
+  if(!cnt) return;
+  cnt.textContent = freePlaces;
+  const pct = (freePlaces / TOTAL_PLACES) * 100;
+  fill.style.width = pct + '%';
+  stat.classList.remove('ok','busy','full');
+  if(freePlaces === 0){ stat.classList.add('full'); stat.textContent = '✗ Мест нет'; }
+  else if(pct < 20){ stat.classList.add('busy'); stat.textContent = '⚠ Мало мест'; }
+  else { stat.classList.add('ok'); stat.textContent = '✓ Места есть'; }
+}
 
 // TARIFF
 function selTariff(n){
@@ -491,30 +536,11 @@ function selTariff(n){
 }
 function chHours(d){ ST.hours=Math.max(1,Math.min(24,ST.hours+d)); document.getElementById('hval').textContent=ST.hours; updSum(); }
 function chDays(d){ ST.days=Math.max(1,Math.min(30,ST.days+d)); document.getElementById('dval').textContent=ST.days; updSum(); }
-
-// CELL
-function selCell(n){
-  if(ST.cell){ const p=document.getElementById('cl'+ST.cell); if(p) p.classList.remove('sel'); }
-  ST.cell=n;
-  document.getElementById('cl'+n).classList.add('sel');
-  document.getElementById('ctext').textContent='✓ Ячейка №'+n+' выбрана';
-  document.getElementById('cchosen').classList.add('vis');
-  updBtn();
-  if(tg&&tg.HapticFeedback) tg.HapticFeedback.selectionChanged();
-}
-function clearCell(){
-  if(ST.cell){ const e=document.getElementById('cl'+ST.cell); if(e) e.classList.remove('sel'); }
-  ST.cell=null;
-  document.getElementById('cchosen').classList.remove('vis');
-  updBtn();
-}
-
-// ITEMS
-function chItems(d){ ST.items=Math.max(1,Math.min(20,ST.items+d)); document.getElementById('ival').textContent=ST.items; updSum(); }
+function chItems(d){ ST.items=Math.max(1,Math.min(10,ST.items+d)); document.getElementById('ival').textContent=ST.items; updSum(); }
 
 // NAV
 const SCS=['s0','s1','s2','s3'];
-const HDRS=['Выберите тариф','Выберите ячейку','Детали бронирования','Подтверждение'];
+const HDRS=['Выберите тариф','Наличие мест','Детали бронирования','Подтверждение'];
 const BTNS=['Далее →','Далее →','Забронировать ✓',''];
 
 function showS(i){
@@ -526,6 +552,7 @@ function showS(i){
   mb.style.display=i===3?'none':'block';
   mb.textContent=BTNS[i];
   updBtn();
+  if(i===1) updAvailability();
   if(i===2) initDetails();
   if(i===3) buildSuccess();
   window.scrollTo(0,0);
@@ -533,7 +560,7 @@ function showS(i){
 function goBack(){ if(ST.step>0) showS(ST.step-1); }
 function next(){
   if(ST.step===0){ if(!ST.tariff){ toast('Выберите тариф'); return; } showS(1); }
-  else if(ST.step===1){ if(!ST.cell){ toast('Выберите ячейку'); return; } showS(2); }
+  else if(ST.step===1){ if(freePlaces<=0){ toast('Все места заняты'); return; } showS(2); }
   else if(ST.step===2){ if(!validateD()) return; showS(3); if(tg&&tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('success'); }
 }
 
@@ -551,7 +578,9 @@ function initDetails(){
   else { const h=pad(now.getHours()); const m=now.getMinutes()<30?'00':'30'; ft.value=h+':'+m; ft.disabled=false; ft.min=''; tf.style.display='block'; }
   if(tg&&tg.initDataUnsafe&&tg.initDataUnsafe.user){
     const u=tg.initDataUnsafe.user;
-    document.getElementById('fn').value=[u.first_name,u.last_name].filter(Boolean).join(' ');
+    if(!document.getElementById('fn').value){
+      document.getElementById('fn').value=[u.first_name,u.last_name].filter(Boolean).join(' ');
+    }
   }
   document.getElementById('ival').textContent=ST.items;
   updSum();
@@ -575,12 +604,16 @@ function tariffLabel(){
   if(t===5) return `Суточное, ${ST.days} сут × 600 ₽`;
   return '—';
 }
-function fmtDate(s){ if(!s) return '—'; const [y,m,d]=s.split('-'); const mn=['янв','фев','мар','апр','май','июн','июл','авг','сен','окт','ноя','дек']; return `${d} ${mn[+m-1]} ${y}`; }
+// Формат даты ДД.ММ.ГГГГ
+function fmtDate(s){
+  if(!s) return '—';
+  const [y,m,d]=s.split('-');
+  return `${d}.${m}.${y}`;
+}
 
 function updSum(){
   const tot=calcTotal();
   document.getElementById('ss-t').textContent=tariffLabel();
-  document.getElementById('ss-c').textContent=ST.cell?'Ячейка №'+ST.cell:'—';
   document.getElementById('ss-i').textContent=ST.items+' шт';
   const dt=document.getElementById('fd')?document.getElementById('fd').value:'';
   const tm=document.getElementById('ft')?document.getElementById('ft').value:'';
@@ -589,12 +622,28 @@ function updSum(){
   document.getElementById('ss-tot').textContent=tot.toLocaleString('ru-RU')+' ₽';
 }
 
+// Валидация телефона: минимум 10 цифр
+function isValidPhone(s){
+  const digits = (s||'').replace(/\D/g,'');
+  return digits.length >= 10;
+}
+
 function validateD(){
-  const name=document.getElementById('fn').value.trim();
-  const date=document.getElementById('fd').value;
-  const time=document.getElementById('ft').value;
-  if(!name){ toast('Введите имя'); return false; }
-  if(!date){ toast('Выберите дату'); return false; }
+  const fn=document.getElementById('fn');
+  const fp=document.getElementById('fp');
+  const fd=document.getElementById('fd');
+  const ft=document.getElementById('ft');
+  [fn,fp,fd].forEach(e=>e.classList.remove('err'));
+
+  const name=fn.value.trim();
+  const phone=fp.value.trim();
+  const date=fd.value;
+  const time=ft.value;
+
+  if(!name){ fn.classList.add('err'); toast('Введите имя'); fn.focus(); return false; }
+  if(!phone){ fp.classList.add('err'); toast('Введите телефон'); fp.focus(); return false; }
+  if(!isValidPhone(phone)){ fp.classList.add('err'); toast('Введите корректный телефон'); fp.focus(); return false; }
+  if(!date){ fd.classList.add('err'); toast('Выберите дату'); return false; }
   if(ST.tariff!==5&&!time){ toast('Выберите время'); return false; }
   if(ST.tariff===4&&time<'19:00'){ toast('Вечерний тариф — с 19:00'); return false; }
   return true;
@@ -605,28 +654,24 @@ function buildSuccess(){
   const date=document.getElementById('fd').value;
   const time=document.getElementById('ft').value;
   const name=document.getElementById('fn').value.trim();
+  const phone=document.getElementById('fp').value.trim();
   const tot=calcTotal();
   const now=new Date(); const pad=n=>String(n).padStart(2,'0');
   const dc=`${now.getFullYear()}${pad(now.getMonth()+1)}${pad(now.getDate())}`;
   const bid=`LS-${dc}-${String(Math.floor(Math.random()*9000)+1000)}`;
+  // место присваивается: 500 - оставшиеся + 1
+  assignedNum = (TOTAL_PLACES - freePlaces) + 1;
 
   document.getElementById('bcode').textContent=bid;
-  document.getElementById('rc').textContent='Ячейка №'+ST.cell;
   document.getElementById('rt').textContent=tariffLabel();
   document.getElementById('rd').textContent=fmtDate(date);
   document.getElementById('rti').textContent=ST.tariff===5?'—':(time||'—');
   document.getElementById('ri').textContent=ST.items+' шт';
   document.getElementById('rn').textContent=name;
+  document.getElementById('rph').textContent=phone;
   document.getElementById('rtot').textContent=tot.toLocaleString('ru-RU')+' ₽';
 
-  const qrData=JSON.stringify({id:bid,cell:ST.cell,tariff:tariffLabel(),date,time:ST.tariff===5?'сутки':time,items:ST.items,name,total:tot});
-  const box=document.getElementById('qrbox'); box.innerHTML='';
-  try{ new QRCode(box,{text:qrData,width:200,height:200,colorDark:'#111111',colorLight:'#ffffff',correctLevel:QRCode.CorrectLevel.M}); }
-  catch(e){ box.innerHTML='<p style="color:var(--hint);font-size:13px;text-align:center;padding:20px">QR-код сформирован</p>'; }
-  busy.add(ST.cell);
-
-  // ── ОТПРАВКА НА СЕРВЕР (для уведомления админу и пользователю) ──
-  const phone=document.getElementById('fp')?document.getElementById('fp').value.trim():'';
+  // ── ОТПРАВКА НА СЕРВЕР ──
   let tgUserId=null, tgUsername=null;
   if(tg && tg.initDataUnsafe && tg.initDataUnsafe.user){
     tgUserId = tg.initDataUnsafe.user.id || null;
@@ -634,31 +679,50 @@ function buildSuccess(){
   }
   const payload={
     booking_id: bid,
-    cell: ST.cell,
+    place_num: assignedNum,
     tariff: tariffLabel(),
     date: date,
     time: ST.tariff===5 ? null : (time || null),
     items: ST.items,
     name: name,
-    phone: phone || null,
+    phone: phone,
     total: tot,
     telegram_user_id: tgUserId,
     telegram_username: tgUsername
   };
+
+  // ── ССЫЛКА ДЛЯ QR ──
+  // Указывает на страницу просмотра брони на нашем сервере
+  const baseUrl = window.location.origin;
+  const qrUrl = `${baseUrl}/b/${bid}`;
+
+  // QR с ссылкой
+  const box=document.getElementById('qrbox'); box.innerHTML='';
+  try{ new QRCode(box,{text:qrUrl,width:200,height:200,colorDark:'#111111',colorLight:'#ffffff',correctLevel:QRCode.CorrectLevel.M}); }
+  catch(e){ box.innerHTML='<p style="color:var(--hint);font-size:13px;text-align:center;padding:20px">QR-код сформирован</p>'; }
+
+  // Отправляем на сервер
   fetch('/api/booking', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify(payload)
-  }).then(r=>r.json()).then(res=>{
+  }).then(r=>{
+    if(!r.ok){
+      return r.json().then(err=>{ throw new Error(err.detail || 'Ошибка бронирования'); });
+    }
+    return r.json();
+  }).then(res=>{
     console.log('Бронь отправлена:', res);
+    if(res && typeof res.free === 'number'){
+      freePlaces = res.free;
+      updAvailability();
+    }
   }).catch(err=>{
     console.error('Ошибка отправки:', err);
+    // Возвращаемся на экран деталей и показываем ошибку
+    showS(2);
+    toast(err.message || 'Ошибка при бронировании');
   });
-
-  // ── ОТПРАВКА ДАННЫХ В БОТА через WebApp API ──
-  if(tg && tg.sendData){
-    try { tg.sendData(qrData); } catch(e) { console.error(e); }
-  }
 }
 
 function saveQR(){
@@ -671,19 +735,19 @@ function saveQR(){
 }
 
 function newBook(){
-  ST.tariff=null; ST.cell=null; ST.items=1; ST.hours=1; ST.days=1;
+  ST.tariff=null; ST.items=1; ST.hours=1; ST.days=1;
   document.querySelectorAll('.tcard').forEach(c=>c.classList.remove('sel'));
   document.getElementById('hp').classList.remove('vis');
   document.getElementById('dp').classList.remove('vis');
   document.getElementById('hval').textContent='1';
   document.getElementById('dval').textContent='1';
-  buildCells(); showS(0);
+  showS(0);
 }
 
 function updBtn(){
   const b=document.getElementById('mbtn');
   if(ST.step===0) b.disabled=!ST.tariff;
-  else if(ST.step===1) b.disabled=!ST.cell;
+  else if(ST.step===1) b.disabled=freePlaces<=0;
   else b.disabled=false;
 }
 
