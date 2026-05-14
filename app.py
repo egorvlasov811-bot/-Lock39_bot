@@ -41,6 +41,8 @@ ADDRESS = "г. Зеленоградск, ул. Железнодорожная, 2
 ADDRESS_HINT = "Ориентир: железнодорожный вокзал Зеленоградска"
 MAPS_URL_YANDEX = "https://yandex.ru/maps/org/kamera_khraneniya_bagazha/245433262999"
 MAPS_URL_2GIS = "https://2gis.ru/kaliningrad/geo/70000001101819705"
+REVIEW_URL_YANDEX = "https://yandex.ru/maps/org/245433262999/reviews/?add-review=true"
+REVIEW_URL_2GIS = "https://2gis.ru/zelenogradsk/firm/70000001101819705/tab/reviews"
 # Универсальный URL для кнопки "Карта" (Яндекс по умолчанию — работает в РФ хорошо)
 MAPS_URL = MAPS_URL_YANDEX
 
@@ -153,9 +155,10 @@ if BOT_TOKEN:
             KeyboardButton(text="📍 Адрес")
         )
         kb.row(
-            KeyboardButton(text="📞 Связаться"),
-            KeyboardButton(text="ℹ️ Помощь")
+            KeyboardButton(text="⭐ Оставить отзыв"),
+            KeyboardButton(text="📞 Связаться")
         )
+        kb.row(KeyboardButton(text="ℹ️ Помощь"))
         return kb.as_markup(resize_keyboard=True, persistent=True)
 
     @dp.message(CommandStart())
@@ -279,6 +282,46 @@ if BOT_TOKEN:
             parse_mode="Markdown"
         )
 
+    @dp.message(F.text == "⭐ Оставить отзыв")
+    async def menu_review(message: types.Message):
+        """Просим оставить отзыв. Отправляем QR + ссылки."""
+        ikb = InlineKeyboardBuilder()
+        ikb.row(InlineKeyboardButton(text="⭐ Отзыв на Яндекс.Картах", url=REVIEW_URL_YANDEX))
+        ikb.row(InlineKeyboardButton(text="⭐ Отзыв на 2ГИС", url=REVIEW_URL_2GIS))
+
+        caption = (
+            "⭐ *Ваш отзыв очень важен для нас!*\n"
+            "━━━━━━━━━━━━━━━━━━\n\n"
+            "Понравился сервис? Поделитесь впечатлениями — это помогает нам "
+            "становиться лучше и помогает другим путешественникам найти нас.\n\n"
+            "🙏 *Спасибо, что вы с нами!*\n\n"
+            "Нажмите одну из кнопок ниже или отсканируйте QR-код 👇"
+        )
+
+        # Создаём QR с двумя ссылками (по одной за раз — Telegram не даст две картинки + caption в одном сообщении)
+        # Шлём отзыв-Яндекс с QR, потом отзыв-2ГИС с QR
+        try:
+            # Объединённый QR — на Яндекс (приоритетнее по объёму отзывов)
+            qr_bytes = make_qr_image(REVIEW_URL_YANDEX)
+            photo = BufferedInputFile(qr_bytes, filename="review_yandex.png")
+            await message.answer_photo(
+                photo=photo,
+                caption=caption,
+                parse_mode="Markdown",
+                reply_markup=ikb.as_markup()
+            )
+            # Второй QR — на 2ГИС отдельным сообщением
+            qr_bytes_2gis = make_qr_image(REVIEW_URL_2GIS)
+            photo_2gis = BufferedInputFile(qr_bytes_2gis, filename="review_2gis.png")
+            await message.answer_photo(
+                photo=photo_2gis,
+                caption="📲 *QR-код для отзыва на 2ГИС*",
+                parse_mode="Markdown"
+            )
+        except Exception as e:
+            print(f"[review] {e}")
+            await message.answer(caption, parse_mode="Markdown", reply_markup=ikb.as_markup())
+
     @dp.message(F.text == "ℹ️ Помощь")
     async def menu_help(message: types.Message):
         await cmd_help(message)
@@ -317,7 +360,7 @@ if BOT_TOKEN:
     async def contact_send(message: types.Message, state: FSMContext):
         # Игнорируем нажатия на кнопки меню — они обработаются своими handler'ами
         menu_buttons = ["📅 Забронировать", "📋 Мои брони", "❌ Отменить бронь",
-                       "💰 Тарифы", "📍 Адрес", "📞 Связаться", "ℹ️ Помощь"]
+                       "💰 Тарифы", "📍 Адрес", "⭐ Оставить отзыв", "📞 Связаться", "ℹ️ Помощь"]
         if message.text in menu_buttons:
             await state.clear()
             return
