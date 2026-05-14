@@ -1328,6 +1328,17 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 
 @app.get("/")
 def root():
+    """Главная страница — лендинг сайта."""
+    if Path("landing.html").exists():
+        return FileResponse("landing.html")
+    if Path("index.html").exists():
+        return FileResponse("index.html")
+    return {"status": "ok"}
+
+
+@app.get("/app")
+def webapp():
+    """Мини-приложение для Telegram-бота."""
     if Path("index.html").exists():
         return FileResponse("index.html")
     return {"status": "ok"}
