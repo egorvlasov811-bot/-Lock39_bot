@@ -355,10 +355,10 @@ section { padding: 100px 0; position: relative; }
 /* TARIFFS */
 .tariffs-grid {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
-  gap: 16px;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 14px;
 }
-@media (max-width: 1100px) { .tariffs-grid { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 1240px) { .tariffs-grid { grid-template-columns: repeat(3, 1fr); } }
 @media (max-width: 720px) { .tariffs-grid { grid-template-columns: repeat(2, 1fr); } }
 @media (max-width: 460px) { .tariffs-grid { grid-template-columns: 1fr; } }
 
@@ -756,7 +756,15 @@ section { padding: 100px 0; position: relative; }
   letter-spacing: 0.15em; color: var(--muted);
   margin-bottom: 16px;
 }
-#qr-canvas { margin: 0 auto 20px; display: block; border-radius: 12px; }
+#qr-canvas {
+  margin: 0 auto 20px;
+  display: flex;
+  justify-content: center;
+}
+#qr-canvas img, #qr-canvas canvas {
+  border-radius: 12px;
+  display: block;
+}
 .qr-card h4 {
   font-family: 'Cormorant Garamond', serif;
   font-size: 22px; font-weight: 600;
@@ -925,10 +933,11 @@ footer {
         <p>Защитим ваш чемодан от царапин и грязи в пути. Качественная плёнка, аккуратная намотка.</p>
         <div class="price-tag">500 ₽ / шт</div>
       </div>
-      <div class="adv-card reveal">
+      <div class="adv-card highlight reveal">
         <div class="adv-icon">🚲</div>
-        <h3>Принимаем велосипеды</h3>
-        <p>И самокаты, и крупный багаж. Отдельная зона для негабаритных вещей. Без вопросов и доплат.</p>
+        <h3>Крупногабарит</h3>
+        <p>Велосипеды, велочемоданы, крупный багаж — храним без проблем. Отдельный тариф для негабаритных вещей.</p>
+        <div class="price-tag">800 ₽ / день</div>
       </div>
       <div class="adv-card reveal">
         <div class="adv-icon">📱</div>
@@ -986,6 +995,13 @@ footer {
         <div class="tariff-desc">24 часа</div>
         <div class="tariff-price">600<small>₽</small></div>
       </div>
+      <div class="tariff">
+        <div class="tariff-badge" style="background: var(--sea-deep);">Крупное</div>
+        <div class="tariff-icon">🚲</div>
+        <h4>Велочемодан</h4>
+        <div class="tariff-desc">Велосипеды,<br>крупногабарит</div>
+        <div class="tariff-price">800<small>₽/день</small></div>
+      </div>
     </div>
 
     <div class="tariffs-note reveal">
@@ -1017,6 +1033,7 @@ footer {
             <button class="calc-opt" data-price="200" data-name="3 часа">🕒 3 часа · 200 ₽</button>
             <button class="calc-opt active" data-price="300" data-name="Весь день">☀️ Весь день · 300 ₽</button>
             <button class="calc-opt" data-price="600" data-name="Сутки">📦 Сутки · 600 ₽</button>
+            <button class="calc-opt" data-price="800" data-name="Велочемодан">🚲 Велочемодан · 800 ₽</button>
           </div>
         </div>
 
@@ -1115,8 +1132,8 @@ footer {
       </div>
       <div class="gallery-item">
         <div>
-          Зона для<br>велосипедов
-          <div class="gallery-stub">Крупный багаж</div>
+          Принимаем<br>крупногабарит
+          <div class="gallery-stub">Велосипеды, велочемоданы</div>
         </div>
       </div>
       <div class="gallery-item">
@@ -1319,7 +1336,7 @@ footer {
 
       <div class="qr-card reveal">
         <div class="qr-card-label">Отсканируйте QR</div>
-        <canvas id="qr-canvas" width="200" height="200"></canvas>
+        <div id="qr-canvas"></div>
         <h4>@Lock39_bot</h4>
         <p>Камера хранения<br>Зеленоградск</p>
       </div>
