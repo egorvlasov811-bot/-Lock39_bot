@@ -1,4 +1,3 @@
-
 """
 Камера хранения — единый процесс: Telegram бот + API сервер + статика
 Запуск: python app.py
@@ -105,6 +104,138 @@ def fmt_date_ru(s: str) -> str:
     except Exception:
         return s
 
+
+# ─────────── ПРОМОКОДЫ ───────────
+
+PROMO_DISCOUNT = 0.10  # 10%
+PROMO_VALID_DAYS = 365  # 1 год
+PROMO_EXCLUDED_TARIFFS = ("Вечерний",)  # на эти не действует
+
+def generate_promo_code(user_id: int) -> str:
+    """Создаёт промокод вида LOCK39-XXXX-YYYY"""
+    import random, string
+    chars = string.ascii_uppercase + string.digits
+    suffix = "".join(random.choices(chars, k=4))
+    return f"LOCK39-{user_id % 10000:04d}-{suffix}"
+
+
+def issue_promo_for_user(user_id: int, source_booking_id: str) -> dict:
+    """Выдаёт промокод пользователю за выданную бронь."""
+    db = load_db()
+    promos = db.setdefault("promo_codes", [])
+    # Проверяем: уже есть неиспользованный промокод?
+    for p in promos:
+        if p["user_id"] == user_id and not p.get("used"):
+            return p
+    code = generate_promo_code(user_id)
+    promo = {
+        "code": code,
+        "user_id": user_id,
+        "discount": PROMO_DISCOUNT,
+        "source_booking": source_booking_id,
+        "issued_at": datetime.datetime.now().isoformat(),
+        "expires_at": (datetime.datetime.now() + datetime.timedelta(days=PROMO_VALID_DAYS)).isoformat(),
+        "used": False,
+    }
+    promos.append(promo)
+    save_db(db)
+    return promo
+
+
+def get_valid_promo_for_user(user_id: int) -> Optional[dict]:
+    """Возвращает действующий неиспользованный промокод юзера, если есть."""
+    db = load_db()
+    now = datetime.datetime.now()
+    for p in db.get("promo_codes", []):
+        if p["user_id"] != user_id:
+            continue
+        if p.get("used"):
+            continue
+        try:
+            expires = datetime.datetime.fromisoformat(p["expires_at"])
+            if expires < now:
+                continue
+        except Exception:
+            continue
+        return p
+    return None
+
+
+def find_promo_by_code(code: str) -> Optional[dict]:
+    """Ищет промокод по строке-коду (без учёта регистра)."""
+    db = load_db()
+    code_up = code.strip().upper()
+    for p in db.get("promo_codes", []):
+        if p["code"].upper() == code_up:
+            return p
+    return None
+
+
+def mark_promo_used(code: str, booking_id: str):
+    """Помечает промокод использованным."""
+    db = load_db()
+    for p in db.get("promo_codes", []):
+        if p["code"].upper() == code.strip().upper():
+            p["used"] = True
+            p["used_at"] = datetime.datetime.now().isoformat()
+            p["used_in_booking"] = booking_id
+            save_db(db)
+            return
+
+
+def is_promo_applicable(tariff_text: str) -> bool:
+    """Можно ли применить промокод к этому тарифу."""
+    for excluded in PROMO_EXCLUDED_TARIFFS:
+        if excluded in tariff_text:
+            return False
+    return True
+
+
+# ─────────── ВРЕМЯ ОКОНЧАНИЯ БРОНИ ───────────
+
+def calc_booking_end(booking: dict) -> Optional[datetime.datetime]:
+    """Вычисляет ожидаемое время окончания брони для авто-выдачи."""
+    try:
+        date_str = booking.get("date")
+        time_str = booking.get("time") or "09:00"
+        if not date_str:
+            return None
+        y, m, d = date_str.split("-")
+        try:
+            h, mi = time_str.split(":")
+            start = datetime.datetime(int(y), int(m), int(d), int(h), int(mi))
+        except Exception:
+            start = datetime.datetime(int(y), int(m), int(d), 9, 0)
+
+        tariff = booking.get("tariff", "")
+        evening_extra = booking.get("evening_extra_hours", 0)
+
+        if "1 час" in tariff and "100" in tariff:
+            end = start + datetime.timedelta(hours=1)
+        elif "3 часа" in tariff:
+            end = start + datetime.timedelta(hours=3)
+        elif "Весь день" in tariff:
+            # До 19:00 + вечерняя доплата
+            end = datetime.datetime(int(y), int(m), int(d), 19 + evening_extra, 0)
+        elif "Вечерний" in tariff:
+            # start + hours из тарифа (вытащим число)
+            import re
+            m_ = re.search(r"(\d+)\s*ч", tariff)
+            hours = int(m_.group(1)) if m_ else 1
+            end = start + datetime.timedelta(hours=hours)
+        elif "Сутки" in tariff or "сут" in tariff:
+            import re
+            m_ = re.search(r"(\d+)\s*сут", tariff)
+            days = int(m_.group(1)) if m_ else 1
+            end = start + datetime.timedelta(days=days)
+        else:
+            end = start + datetime.timedelta(hours=1)
+        return end
+    except Exception as e:
+        print(f"[calc_end] {e}")
+        return None
+
+
 # ─────────── QR ───────────
 
 def make_qr_image(data: str) -> bytes:
@@ -137,6 +268,7 @@ if BOT_TOKEN:
         items = State()
         name = State()
         phone = State()
+        promo = State()
         confirm = State()
 
     # ──────── FSM: связь с админом ────────
@@ -229,9 +361,8 @@ if BOT_TOKEN:
     async def menu_cancel(message: types.Message):
         await cmd_cancel(message)
 
-    @dp.message(F.text == "💰 Тарифы")
-    async def menu_tariffs(message: types.Message):
-        await message.answer(
+    def _tariffs_text() -> str:
+        return (
             "💰 *Тарифы камеры хранения*\n"
             "━━━━━━━━━━━━━━━━━━\n\n"
             "⏱ *1 час* — 100 ₽ за место\n"
@@ -241,19 +372,31 @@ if BOT_TOKEN:
             "☀️ *Весь день* — 300 ₽ за место\n"
             "_С 09:00 до 19:00. Самая выгодная цена_\n\n"
             "🌙 *Вечерний* — 100 ₽/час за место\n"
-            "_Почасово после 19:00_\n\n"
+            "_Только по предварительному звонку, после 19:00_\n\n"
             "📦 *Сутки* — 600 ₽ за место\n"
-            "_Для длительного хранения, до 14 суток_\n\n"
+            "_Длительное хранение_\n\n"
+            "🚲 *Велочемодан / крупногабарит* — 800 ₽/день\n"
+            "_Велосипеды, велочемоданы и прочие негабаритные вещи_\n\n"
+            "📦 *Обмотка чемодана плёнкой* — 500 ₽/шт\n"
+            "_Защита от грязи и царапин_\n\n"
             "━━━━━━━━━━━━━━━━━━\n"
             f"💡 *Что значит «1 место»?*\n"
             f"Это один предмет: {PLACE_EXAMPLES}.\n"
             "Если у вас несколько предметов — выбирайте соответствующее количество мест.\n\n"
+            "🎁 *Программа лояльности:*\n"
+            "После выдачи багажа мы пришлём вам персональный промокод на скидку 10% на следующий визит. Действует 1 год.\n\n"
             "📌 *Лимиты:*\n"
             "• До 10 мест в одной брони\n"
-            "• Одна активная бронь на аккаунт\n"
-            "• Всего 500 мест в камере",
-            parse_mode="Markdown"
+            "• Одна активная бронь на аккаунт"
         )
+
+    @dp.message(F.text == "💰 Тарифы")
+    async def menu_tariffs(message: types.Message):
+        await message.answer(_tariffs_text(), parse_mode="Markdown")
+
+    @dp.message(Command("price"))
+    async def cmd_price(message: types.Message):
+        await message.answer(_tariffs_text(), parse_mode="Markdown")
 
     @dp.message(F.text == "📍 Адрес")
     async def menu_address(message: types.Message):
@@ -346,6 +489,37 @@ if BOT_TOKEN:
             return
         await send_user_confirmation(booking)
 
+    # ──────── /mypromo — мой промокод ────────
+    @dp.message(Command("mypromo"))
+    async def cmd_mypromo(message: types.Message):
+        promo = get_valid_promo_for_user(message.from_user.id)
+        if not promo:
+            await message.answer(
+                "🎁 *Программа лояльности*\n"
+                "━━━━━━━━━━━━━━━━━━\n\n"
+                "У вас пока нет активного промокода.\n\n"
+                "Воспользуйтесь нашей камерой хранения — после выдачи багажа мы автоматически "
+                "пришлём вам персональный *промокод на скидку 10%* на следующий визит.\n\n"
+                "Действует 1 год. Применяется ко всем тарифам, кроме вечернего.",
+                parse_mode="Markdown"
+            )
+            return
+        try:
+            expires = datetime.datetime.fromisoformat(promo["expires_at"])
+            expires_str = expires.strftime("%d.%m.%Y")
+        except Exception:
+            expires_str = "—"
+        await message.answer(
+            f"🎁 *Ваш промокод*\n"
+            f"━━━━━━━━━━━━━━━━━━\n\n"
+            f"`{promo['code']}`\n\n"
+            f"💸 Скидка: *10%*\n"
+            f"📅 Действует до: *{expires_str}*\n\n"
+            f"_Применяется ко всем тарифам, кроме вечернего._\n\n"
+            f"При следующем бронировании введите этот код, когда бот спросит «Есть ли у вас промокод?».",
+            parse_mode="Markdown"
+        )
+
     # ──────── /contact — связь с админом ────────
     @dp.message(Command("contact"))
     async def cmd_contact(message: types.Message, state: FSMContext):
@@ -416,28 +590,42 @@ if BOT_TOKEN:
             return
         db = load_db()
         bookings = db.get("bookings", [])
+        promos = db.get("promo_codes", [])
         today = datetime.date.today().isoformat()
         active = [b for b in bookings if b.get("status") == "active"]
         today_b = [b for b in bookings if b.get("date") == today]
         cancelled = [b for b in bookings if b.get("status") == "cancelled"]
-        total_revenue = sum(b.get("total", 0) for b in bookings if b.get("status") == "active")
+        completed = [b for b in bookings if b.get("status") == "completed"]
+        total_revenue = sum(b.get("total", 0) for b in bookings if b.get("status") in ("active", "completed"))
         occupied = count_active_today()
+
+        # Промокоды
+        promos_active = [p for p in promos if not p.get("used")]
+        promos_used = [p for p in promos if p.get("used")]
+        # Скидок отдано
+        total_discount = sum(b.get("discount_amount", 0) for b in bookings)
 
         text = (
             f"🔧 *Админ-панель*\n"
             f"━━━━━━━━━━━━━━━━━━\n\n"
-            f"📊 *Статистика:*\n"
-            f"• Всего броней: {len(bookings)}\n"
+            f"📊 *Брони:*\n"
+            f"• Всего: {len(bookings)}\n"
             f"• Активных: {len(active)}\n"
             f"• На сегодня: {len(today_b)}\n"
+            f"• Завершено: {len(completed)}\n"
             f"• Отменено: {len(cancelled)}\n\n"
             f"📦 *Загрузка:*\n"
             f"• Занято: *{occupied}* из {TOTAL_PLACES}\n"
             f"• Свободно: *{TOTAL_PLACES - occupied}*\n\n"
-            f"💵 *Выручка (активные):* {total_revenue:,} ₽"
+            f"🎁 *Программа лояльности:*\n"
+            f"• Выдано промокодов: {len(promos)}\n"
+            f"• Использовано: {len(promos_used)}\n"
+            f"• Активных у клиентов: {len(promos_active)}\n"
+            f"• Сумма скидок: {total_discount:,} ₽\n\n"
+            f"💵 *Выручка:* {total_revenue:,} ₽"
         )
         kb = InlineKeyboardBuilder()
-        kb.row(InlineKeyboardButton(text="📋 Активные брони", callback_data="adm:active"))
+        kb.row(InlineKeyboardButton(text="📋 Активные брони (выдать)", callback_data="adm:active"))
         kb.row(InlineKeyboardButton(text="📅 Брони на сегодня", callback_data="adm:today"))
         await message.answer(text, parse_mode="Markdown", reply_markup=kb.as_markup())
 
@@ -460,8 +648,48 @@ if BOT_TOKEN:
                 f"👤 {b['name']} • 📞 {b['phone']}\n"
                 f"💵 {b['total']:,} ₽"
             )
-            await callback.message.answer(text, parse_mode="Markdown")
+            kb_b = InlineKeyboardBuilder()
+            kb_b.row(InlineKeyboardButton(
+                text="✅ Выдан — отправить отзыв и промокод",
+                callback_data=f"adm:pickup:{b['booking_id']}"
+            ))
+            await callback.message.answer(text, parse_mode="Markdown", reply_markup=kb_b.as_markup())
         await callback.answer()
+
+    @dp.callback_query(F.data.startswith("adm:pickup:"))
+    async def adm_pickup(callback: types.CallbackQuery):
+        """Ручная выдача багажа — шлёт юзеру отзыв и промокод."""
+        if not ADMIN_CHAT_ID or str(callback.from_user.id) != str(ADMIN_CHAT_ID):
+            await callback.answer("Доступ запрещён", show_alert=True)
+            return
+        bid = callback.data.split(":", 2)[2]
+        db = load_db()
+        booking = next((b for b in db.get("bookings", []) if b["booking_id"] == bid), None)
+        if not booking:
+            await callback.answer("Бронь не найдена", show_alert=True)
+            return
+        if booking.get("status") != "active":
+            await callback.answer(f"Бронь уже не активна (статус: {booking.get('status')})", show_alert=True)
+            return
+        # Шлём отзыв и промокод
+        try:
+            await send_review_and_promo(booking)
+            booking["status"] = "completed"
+            booking["review_requested"] = True
+            booking["completed_at"] = datetime.datetime.now().isoformat()
+            booking["completed_by"] = "admin_manual"
+            save_db(db)
+            await callback.answer("✅ Отправлено клиенту", show_alert=True)
+            try:
+                await callback.message.edit_text(
+                    callback.message.text + "\n\n☑️ *Выдан, отзыв и промокод отправлены*",
+                    parse_mode="Markdown"
+                )
+            except Exception:
+                pass
+        except Exception as e:
+            print(f"[adm_pickup] {e}")
+            await callback.answer(f"Ошибка: {e}", show_alert=True)
 
     @dp.callback_query(F.data == "adm:today")
     async def adm_today(callback: types.CallbackQuery):
@@ -504,16 +732,37 @@ if BOT_TOKEN:
             "*3️⃣ Команды вручную:*\n"
             "/start — главное меню\n"
             "/book — забронировать через чат\n"
+            "/price — тарифы и цены\n"
             "/info — посмотреть мою активную бронь\n"
             "/mybookings — история бронирований\n"
+            "/mypromo — мой промокод на 10% скидку\n"
             "/cancel — отменить активную бронь\n"
             "/contact — написать администрации\n"
             "/help — эта справка\n\n"
             "━━━━━━━━━━━━━━━━━━\n"
+            "🎁 *Программа лояльности:*\n"
+            "После каждой выдачи багажа мы пришлём вам персональный промокод на 10% на следующий визит. Действует 1 год.\n\n"
             "🔐 *Мини-приложение* — открывается через синюю кнопку «Меню» снизу слева или из /start.",
             parse_mode="Markdown",
             reply_markup=main_menu_kb()
         )
+
+    # Русские алиасы команд (для удобства)
+    @dp.message(F.text.in_(["/прайс", "/Прайс", "/ПРАЙС"]))
+    async def ru_alias_price(message: types.Message):
+        await cmd_price(message)
+
+    @dp.message(F.text.in_(["/забронировать", "/Забронировать"]))
+    async def ru_alias_book(message: types.Message, state: FSMContext):
+        await cmd_book(message, state)
+
+    @dp.message(F.text.in_(["/тарифы", "/Тарифы"]))
+    async def ru_alias_tariffs(message: types.Message):
+        await cmd_price(message)
+
+    @dp.message(F.text.in_(["/промокод", "/Промокод"]))
+    async def ru_alias_promo(message: types.Message):
+        await cmd_mypromo(message)
 
     @dp.message(Command("mybookings"))
     async def cmd_mybookings(message: types.Message):
@@ -1077,20 +1326,128 @@ if BOT_TOKEN:
             return
         await state.update_data(phone=phone)
 
-        # Считаем полную сумму с учётом вечерней доплаты
+        data = await state.get_data()
+        tariff_text = tariff_label_bot(data)
+
+        # Если тариф вечерний — промокод не применить, пропускаем шаг
+        if not is_promo_applicable(tariff_text):
+            await state.update_data(promo_code=None, promo_discount=0)
+            await _show_booking_summary(message, state)
+            return
+
+        # Проверяем, есть ли у юзера действующий промокод
+        promo = get_valid_promo_for_user(message.from_user.id)
+
+        kb = InlineKeyboardBuilder()
+        if promo:
+            try:
+                expires = datetime.datetime.fromisoformat(promo["expires_at"])
+                expires_str = expires.strftime("%d.%m.%Y")
+            except Exception:
+                expires_str = "—"
+            kb.row(InlineKeyboardButton(
+                text=f"🎁 Применить мой код {promo['code']} (−10%)",
+                callback_data="promo:auto"
+            ))
+            kb.row(InlineKeyboardButton(text="✏️ Ввести другой код", callback_data="promo:manual"))
+            kb.row(InlineKeyboardButton(text="⏭ Без промокода", callback_data="promo:skip"))
+            await message.answer(
+                f"🎁 *У вас есть промокод!*\n"
+                f"━━━━━━━━━━━━━━\n\n"
+                f"`{promo['code']}` — скидка *10%*\n"
+                f"_Действует до {expires_str}_\n\n"
+                f"Применить его к этому заказу?",
+                parse_mode="Markdown",
+                reply_markup=kb.as_markup()
+            )
+        else:
+            kb.row(InlineKeyboardButton(text="✏️ Ввести промокод", callback_data="promo:manual"))
+            kb.row(InlineKeyboardButton(text="⏭ Без промокода", callback_data="promo:skip"))
+            await message.answer(
+                "🎁 *Промокод на скидку*\n"
+                "━━━━━━━━━━━━━━\n\n"
+                "Если у вас есть промокод от прошлого визита — введите его сейчас, чтобы получить скидку 10%.",
+                parse_mode="Markdown",
+                reply_markup=kb.as_markup()
+            )
+        await state.set_state(BookFSM.promo)
+
+    @dp.callback_query(BookFSM.promo, F.data == "promo:skip")
+    async def bt_promo_skip(callback: types.CallbackQuery, state: FSMContext):
+        await state.update_data(promo_code=None, promo_discount=0)
+        await callback.answer()
+        await _show_booking_summary(callback.message, state)
+
+    @dp.callback_query(BookFSM.promo, F.data == "promo:auto")
+    async def bt_promo_auto(callback: types.CallbackQuery, state: FSMContext):
+        promo = get_valid_promo_for_user(callback.from_user.id)
+        if not promo:
+            await callback.answer("Промокод не найден", show_alert=True)
+            return
+        await state.update_data(promo_code=promo["code"], promo_discount=promo["discount"])
+        await callback.answer("✅ Промокод применён")
+        await _show_booking_summary(callback.message, state)
+
+    @dp.callback_query(BookFSM.promo, F.data == "promo:manual")
+    async def bt_promo_manual(callback: types.CallbackQuery, state: FSMContext):
+        await callback.answer()
+        await callback.message.answer(
+            "✏️ Введите промокод текстом (например `LOCK39-1234-AB12`):",
+            parse_mode="Markdown"
+        )
+
+    @dp.message(BookFSM.promo, F.text)
+    async def bt_promo_input(message: types.Message, state: FSMContext):
+        code = (message.text or "").strip()
+        # Игнорируем кнопки меню
+        menu_buttons = ["📅 Забронировать", "📋 Мои брони", "❌ Отменить бронь",
+                       "💰 Тарифы", "📍 Адрес", "⭐ Оставить отзыв", "📞 Связаться", "ℹ️ Помощь"]
+        if code in menu_buttons:
+            return
+        promo = find_promo_by_code(code)
+        if not promo:
+            await message.answer(
+                "❌ Промокод не найден. Проверьте написание или нажмите *⏭ Без промокода* выше.",
+                parse_mode="Markdown"
+            )
+            return
+        if promo.get("used"):
+            await message.answer("❌ Этот промокод уже использован.")
+            return
+        try:
+            expires = datetime.datetime.fromisoformat(promo["expires_at"])
+            if expires < datetime.datetime.now():
+                await message.answer("❌ Срок действия этого промокода истёк.")
+                return
+        except Exception:
+            pass
+        # Промокод принадлежит другому юзеру — на всякий случай разрешаем (вдруг друг поделился)
+        await state.update_data(promo_code=promo["code"], promo_discount=promo["discount"])
+        await message.answer(f"✅ Промокод *{promo['code']}* применён! Скидка 10%.", parse_mode="Markdown")
+        await _show_booking_summary(message, state)
+
+    async def _show_booking_summary(message_or_msg, state: FSMContext):
+        """Показывает финальное резюме брони с учётом промокода."""
         data = await state.get_data()
         base = calc_booking_total(data)
         extra = calc_evening_extra(data)
-        total = base + extra
-        await state.update_data(total=total, base_price=base, evening_extra=extra)
+        subtotal = base + extra
+        discount_rate = data.get("promo_discount", 0)
+        discount_amount = int(subtotal * discount_rate) if discount_rate else 0
+        total = subtotal - discount_amount
+        await state.update_data(
+            total=total, base_price=base, evening_extra=extra,
+            discount_amount=discount_amount,
+        )
 
-        # Формируем разбивку цены
         price_lines = []
         if extra > 0:
             extra_hours = data.get("evening_extra_hours", 0)
             end_time = 19 + extra_hours
             price_lines.append(f"  • Базовый тариф (09:00–19:00): *{base:,} ₽*")
             price_lines.append(f"  • Доплата за вечер (19:00–{end_time}:00, {extra_hours} ч × 100 ₽ × {data['items']} мест): *{extra:,} ₽*")
+        if discount_amount > 0:
+            price_lines.append(f"  • Промокод `{data.get('promo_code')}`: *−{discount_amount:,} ₽* _(скидка 10%)_")
         price_breakdown = "\n".join(price_lines)
 
         text = (
@@ -1101,7 +1458,7 @@ if BOT_TOKEN:
             f"⏰ Время: {data.get('time') or '—'}\n"
             f"🎒 Мест: {data['items']} шт\n"
             f"👤 Имя: {data['name']}\n"
-            f"📞 Тел.: {phone}\n"
+            f"📞 Тел.: {data['phone']}\n"
         )
         if price_breakdown:
             text += f"\n💵 *Расчёт цены:*\n{price_breakdown}\n"
@@ -1112,7 +1469,7 @@ if BOT_TOKEN:
             InlineKeyboardButton(text="✅ Подтвердить", callback_data="bconfirm:yes"),
             InlineKeyboardButton(text="❌ Отменить", callback_data="bconfirm:no")
         )
-        await message.answer(text, parse_mode="Markdown", reply_markup=kb.as_markup())
+        await message_or_msg.answer(text, parse_mode="Markdown", reply_markup=kb.as_markup())
         await state.set_state(BookFSM.confirm)
 
     @dp.callback_query(BookFSM.confirm, F.data == "bconfirm:no")
@@ -1165,16 +1522,25 @@ if BOT_TOKEN:
             "base_price": data.get("base_price", data["total"]),
             "evening_extra": data.get("evening_extra", 0),
             "evening_extra_hours": data.get("evening_extra_hours", 0),
+            "promo_code": data.get("promo_code"),
+            "discount_amount": data.get("discount_amount", 0),
             "telegram_user_id": callback.from_user.id,
             "telegram_username": callback.from_user.username,
             "created_at": now.isoformat(),
             "status": "active",
+            "review_requested": False,
+            "promo_issued": False,
             "source": "bot_chat",
         }
 
         db = load_db()
         db.setdefault("bookings", []).append(booking)
         save_db(db)
+
+        # Помечаем промокод использованным
+        if data.get("promo_code"):
+            mark_promo_used(data["promo_code"], bid)
+
         await state.clear()
 
         # Удаляем экран подтверждения
@@ -1267,8 +1633,10 @@ async def set_bot_commands():
     commands = [
         BotCommand(command="start", description="🏠 Главное меню"),
         BotCommand(command="book", description="📅 Забронировать место"),
+        BotCommand(command="price", description="💰 Тарифы и цены"),
         BotCommand(command="info", description="🎫 Моя активная бронь + QR"),
         BotCommand(command="mybookings", description="📋 История бронирований"),
+        BotCommand(command="mypromo", description="🎁 Мой промокод (скидка 10%)"),
         BotCommand(command="cancel", description="❌ Отменить активную бронь"),
         BotCommand(command="contact", description="📞 Связаться с администрацией"),
         BotCommand(command="help", description="ℹ️ Помощь и список команд"),
@@ -1291,6 +1659,99 @@ async def start_bot():
         print(f"[bot] {e}")
 
 
+# ─────────── ФОНОВАЯ ЗАДАЧА: запрос отзыва + промокод ───────────
+
+async def auto_review_loop():
+    """
+    Каждые 5 минут проверяет брони, у которых:
+    - status == 'active'
+    - время окончания + 15 минут уже наступило
+    - review_requested != True
+    Шлёт юзеру просьбу об отзыве + промокод, помечает бронь как 'completed'.
+    """
+    if not bot:
+        return
+    print("🔁 Auto-review loop запущен")
+    while True:
+        try:
+            await asyncio.sleep(300)  # 5 минут
+            db = load_db()
+            now = datetime.datetime.now()
+            changed = False
+            for b in db.get("bookings", []):
+                if b.get("status") != "active":
+                    continue
+                if b.get("review_requested"):
+                    continue
+                end = calc_booking_end(b)
+                if not end:
+                    continue
+                # Через 15 минут после окончания тарифа — пора
+                trigger_time = end + datetime.timedelta(minutes=15)
+                if now < trigger_time:
+                    continue
+                # Шлём отзыв + промокод
+                user_id = b.get("telegram_user_id")
+                if user_id:
+                    try:
+                        await send_review_and_promo(b)
+                        b["review_requested"] = True
+                        b["status"] = "completed"
+                        b["completed_at"] = now.isoformat()
+                        changed = True
+                    except Exception as e:
+                        print(f"[auto-review] {e}")
+            if changed:
+                save_db(db)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            print(f"[auto-review-loop] {e}")
+
+
+async def send_review_and_promo(booking: dict):
+    """Шлёт юзеру: спасибо + просьба об отзыве + промокод."""
+    if not bot:
+        return
+    user_id = booking.get("telegram_user_id")
+    if not user_id:
+        return
+
+    # Создаём промокод (если ещё нет)
+    promo = issue_promo_for_user(user_id, booking["booking_id"])
+    try:
+        expires = datetime.datetime.fromisoformat(promo["expires_at"])
+        expires_str = expires.strftime("%d.%m.%Y")
+    except Exception:
+        expires_str = "—"
+
+    ikb = InlineKeyboardBuilder()
+    ikb.row(InlineKeyboardButton(text="⭐ Отзыв на Яндекс.Картах", url=REVIEW_URL_YANDEX))
+    ikb.row(InlineKeyboardButton(text="⭐ Отзыв на 2ГИС", url=REVIEW_URL_2GIS))
+
+    text = (
+        f"🙏 *Спасибо, что были с нами!*\n"
+        f"━━━━━━━━━━━━━━━━━━\n\n"
+        f"Надеемся, ваша прогулка по Зеленоградску прошла отлично, "
+        f"а багаж ждал вас в полной сохранности.\n\n"
+        f"⭐ *Ваш отзыв очень важен для нас.*\n"
+        f"Поделитесь впечатлениями — это помогает нам становиться лучше "
+        f"и помогает другим путешественникам найти нас.\n\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"🎁 *Подарок: ваш промокод*\n\n"
+        f"`{promo['code']}`\n\n"
+        f"💸 Скидка *10%* на следующий визит\n"
+        f"📅 Действует до *{expires_str}*\n\n"
+        f"_Скидка применяется ко всем тарифам, кроме вечернего. "
+        f"Просто введите код при следующем бронировании._\n\n"
+        f"До новых встреч! 🌊"
+    )
+    try:
+        await bot.send_message(user_id, text, parse_mode="Markdown", reply_markup=ikb.as_markup())
+    except Exception as e:
+        print(f"[review-msg] {e}")
+
+
 # ─────────── API ───────────
 
 class BookingRequest(BaseModel):
@@ -1310,15 +1771,18 @@ class BookingRequest(BaseModel):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     bot_task = None
+    review_task = None
     if bot and dp:
         bot_task = asyncio.create_task(start_bot())
+        review_task = asyncio.create_task(auto_review_loop())
     yield
-    if bot_task:
-        bot_task.cancel()
-        try:
-            await bot_task
-        except asyncio.CancelledError:
-            pass
+    for t in (bot_task, review_task):
+        if t:
+            t.cancel()
+            try:
+                await t
+            except asyncio.CancelledError:
+                pass
     if bot:
         await bot.session.close()
 
