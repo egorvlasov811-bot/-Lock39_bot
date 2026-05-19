@@ -13,7 +13,7 @@ from contextlib import asynccontextmanager
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
@@ -1801,10 +1801,47 @@ def root():
     return {"status": "ok"}
 
 
+# ─────────── SEO: FAVICON / SITEMAP / ROBOTS ───────────
+
 SITE_URL = "https://lock39.ru"
 
 
-@app.get("/robots.txt", response_class=PlainTextResponse)
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon_ico():
+    return FileResponse("favicon.ico")
+
+
+@app.get("/favicon.svg", include_in_schema=False)
+def favicon_svg():
+    return FileResponse("favicon.svg", media_type="image/svg+xml")
+
+
+@app.get("/favicon-96x96.png", include_in_schema=False)
+def favicon_96():
+    return FileResponse("favicon-96x96.png", media_type="image/png")
+
+
+@app.get("/apple-touch-icon.png", include_in_schema=False)
+def apple_touch_icon():
+    return FileResponse("apple-touch-icon.png", media_type="image/png")
+
+
+@app.get("/site.webmanifest", include_in_schema=False)
+def webmanifest():
+    return FileResponse("site.webmanifest", media_type="application/manifest+json")
+
+
+@app.get("/web-app-manifest-192x192.png", include_in_schema=False)
+def web_manifest_192():
+    return FileResponse("web-app-manifest-192x192.png", media_type="image/png")
+
+
+@app.get("/web-app-manifest-512x512.png", include_in_schema=False)
+def web_manifest_512():
+    return FileResponse("web-app-manifest-512x512.png", media_type="image/png")
+
+
+@app.get("/robots.txt", response_class=PlainTextResponse, include_in_schema=False)
 def robots_txt():
     """robots.txt — разрешаем индексировать всё, кроме API и приватных страниц."""
     return (
@@ -1818,7 +1855,7 @@ def robots_txt():
     )
 
 
-@app.get("/sitemap.xml")
+@app.get("/sitemap.xml", include_in_schema=False)
 def sitemap_xml():
     """sitemap.xml — карта сайта для поисковиков."""
     today = datetime.date.today().isoformat()
