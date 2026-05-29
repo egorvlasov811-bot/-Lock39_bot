@@ -270,18 +270,29 @@ def _now() -> datetime.datetime:
     return datetime.datetime.now()
 
 
-def is_user_banned(user_id: int) -> tuple[bool, Optional[dict]]:
-    """Проверяет забанен ли юзер. Возвращает (забанен?, инфа о бане)."""
-    if not user_id:
+def is_user_banned(user_id: int, username: Optional[str] = None) -> tuple[bool, Optional[dict]]:
+    """Проверяет забанен ли юзер. Проверка по user_id ИЛИ username.
+    Возвращает (забанен?, инфа о бане)."""
+    if not user_id and not username:
         return False, None
     db = load_db()
     bans = db.get("bans", [])
     now = _now()
+    uname_clean = (username or "").lstrip("@").lower() if username else None
+    changed = False
     for ban in bans:
-        if ban.get("user_id") != user_id:
-            continue
         if ban.get("active") is False:
             continue
+
+        # Проверяем по user_id
+        match_by_id = user_id and ban.get("user_id") == user_id
+        # Проверяем по username (для проактивных банов без user_id)
+        ban_uname = (ban.get("username") or "").lstrip("@").lower()
+        match_by_uname = uname_clean and ban_uname and ban_uname == uname_clean
+
+        if not (match_by_id or match_by_uname):
+            continue
+
         # Проверяем срок
         expires = ban.get("expires_at")
         if expires:
@@ -291,11 +302,22 @@ def is_user_banned(user_id: int) -> tuple[bool, Optional[dict]]:
                     # Срок вышел — снимаем
                     ban["active"] = False
                     ban["auto_expired_at"] = now.isoformat()
-                    save_db(db)
+                    changed = True
                     continue
             except Exception:
                 pass
+
+        # Если забанили по username, но теперь знаем user_id — запишем
+        if match_by_uname and not ban.get("user_id") and user_id:
+            ban["user_id"] = user_id
+            changed = True
+
+        if changed:
+            save_db(db)
         return True, ban
+
+    if changed:
+        save_db(db)
     return False, None
 
 
@@ -326,12 +348,21 @@ def ban_user(user_id: int, username: Optional[str], days: Optional[int], reason:
     return ban
 
 
-def unban_user(user_id: int, by: str = "admin") -> bool:
-    """Снимает активные баны с пользователя. Возвращает True если что-то сняли."""
+def unban_user(user_id: Optional[int] = None, username: Optional[str] = None, by: str = "admin") -> bool:
+    """Снимает активные баны с пользователя по user_id или username.
+    Возвращает True если что-то сняли."""
+    if not user_id and not username:
+        return False
     db = load_db()
     changed = False
+    uname_clean = (username or "").lstrip("@").lower() if username else None
     for ban in db.get("bans", []):
-        if ban.get("user_id") == user_id and ban.get("active"):
+        if not ban.get("active"):
+            continue
+        match_by_id = user_id and ban.get("user_id") == user_id
+        ban_uname = (ban.get("username") or "").lstrip("@").lower()
+        match_by_uname = uname_clean and ban_uname and ban_uname == uname_clean
+        if match_by_id or match_by_uname:
             ban["active"] = False
             ban["unbanned_at"] = _now().isoformat()
             ban["unbanned_by"] = by
@@ -409,7 +440,7 @@ if BOT_TOKEN:
             # Админ — всегда проходит
             if ADMIN_CHAT_ID and str(user.id) == str(ADMIN_CHAT_ID):
                 return await handler(event, data)
-            banned, _ = is_user_banned(user.id)
+            banned, _ = is_user_banned(user.id, user.username)
             if banned:
                 # Тихо игнорируем апдейт. Бот ничего не отвечает.
                 # На колбэки нужно ответить, иначе у юзера будет крутиться загрузка.
@@ -925,29 +956,23 @@ if BOT_TOKEN:
             return
         days = None if choice == "forever" else int(choice)
         await state.update_data(days=days)
-        # Делаем бан без причины (можно расширить позже)
         data = await state.get_data()
         username = data["username"]
-        # Резолвим username → user_id
+        # Резолвим username → user_id (если возможно)
         uname_clean = username.lstrip("@")
         user_id = None
         if uname_clean.isdigit():
             user_id = int(uname_clean)
+            stored_username = None
         else:
             user_id = find_user_id_by_username(uname_clean)
-        if not user_id:
-            await callback.message.edit_text(
-                f"❌ Не удалось найти пользователя *{username}*.\n\n"
-                f"Возможно, он ещё ни разу не писал боту.\n"
-                f"Попробуйте указать его Telegram ID напрямую (числом).",
-                parse_mode="Markdown"
-            )
-            await state.clear()
-            return
+            stored_username = uname_clean
 
+        # Бан можно сделать даже без user_id — middleware будет ловить по username
+        # как только этот юзер впервые напишет боту
         ban = ban_user(
             user_id=user_id,
-            username=uname_clean if not uname_clean.isdigit() else None,
+            username=stored_username,
             days=days,
             reason=DEFAULT_BAN_REASON,
             banned_by=f"admin:{callback.from_user.id}",
@@ -957,12 +982,21 @@ if BOT_TOKEN:
             duration_text = "навсегда"
         else:
             duration_text = f"на {days} {'день' if days==1 else 'дн.'}"
+
+        if user_id:
+            identity = f"{username} (id {user_id})"
+            unban_hint = f"/unban {user_id} или /unban {username}"
+        else:
+            identity = f"{username} _(user_id пока неизвестен)_"
+            unban_hint = f"/unban {username}"
+
         await callback.message.edit_text(
             f"✅ *Пользователь забанен*\n\n"
-            f"👤 {username} (id {user_id})\n"
+            f"👤 {identity}\n"
             f"📅 Срок: {duration_text}\n\n"
-            f"Бот не будет реагировать на его сообщения.\n"
-            f"Чтобы разбанить: /unban {user_id} или /unban {username}",
+            f"Бот не будет реагировать на его сообщения "
+            f"{'сразу' if user_id else 'как только он впервые попытается написать'}.\n\n"
+            f"Разбанить: {unban_hint}",
             parse_mode="Markdown"
         )
 
@@ -976,15 +1010,11 @@ if BOT_TOKEN:
             await message.answer("Использование: `/unban @username` или `/unban 123456789`", parse_mode="Markdown")
             return
         target = parts[1].strip().lstrip("@")
-        if target.isdigit():
-            user_id = int(target)
-        else:
-            user_id = find_user_id_by_username(target)
-        if not user_id:
-            await message.answer(f"❌ Пользователь *{target}* не найден.", parse_mode="Markdown")
-            return
-        if unban_user(user_id, by=f"admin:{message.from_user.id}"):
-            await message.answer(f"✅ Пользователь *{target}* (id {user_id}) разбанен.", parse_mode="Markdown")
+        user_id = int(target) if target.isdigit() else None
+        username = None if target.isdigit() else target
+
+        if unban_user(user_id=user_id, username=username, by=f"admin:{message.from_user.id}"):
+            await message.answer(f"✅ Пользователь *{target}* разбанен.", parse_mode="Markdown")
         else:
             await message.answer(f"ℹ️ У пользователя *{target}* нет активных банов.", parse_mode="Markdown")
 
@@ -998,7 +1028,7 @@ if BOT_TOKEN:
         except Exception:
             await callback.answer("Ошибка", show_alert=True)
             return
-        if unban_user(user_id, by=f"admin:{callback.from_user.id}"):
+        if unban_user(user_id=user_id, by=f"admin:{callback.from_user.id}"):
             await callback.answer("✅ Разбанен", show_alert=True)
             try:
                 await callback.message.edit_text(
