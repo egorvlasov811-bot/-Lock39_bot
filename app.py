@@ -13,7 +13,7 @@ from contextlib import asynccontextmanager
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
@@ -236,6 +236,143 @@ def calc_booking_end(booking: dict) -> Optional[datetime.datetime]:
         return None
 
 
+# ─────────── БАНЫ И МОДЕРАЦИЯ ───────────
+
+# Стоп-слова для авто-бана. Списки сделаны мягкими — реагируют на оскорбления,
+# угрозы, мат в адрес сервиса. Если попадётся ложное срабатывание — админ
+# всегда может разбанить вручную через /admin.
+PROFANITY_WORDS = [
+    # Мат (базовые корни — этого достаточно для большинства производных)
+    "хуй", "хуя", "хуе", "хуи", "хую",
+    "пизд", "пезд",
+    "ебал", "ебат", "ебан", "ебуч", "ебло", "ебуч", "ёбан", "ёбал",
+    "блядь", "блять", "бляд",
+    "сука", "суки", "суке",
+    "пидор", "пидар", "педик",
+    "мудак", "мудил", "мудач",
+    "залуп", "хер", "херов", "хрен",
+    "гондон", "уебок", "уёбок", "уебк", "уёбк",
+    "долбоеб", "долбоёб", "долбаеб", "долбаёб",
+    "чмо", "ублюд",
+    # Оскорбления/угрозы
+    "идиот", "дебил", "имбецил", "тупой", "тупица",
+    "урод", "придурок", "кретин",
+    "убью", "сдохн", "сдохни", "умри", "удавись",
+    "обмани", "обманул", "лохотрон", "разводи", "развод",
+    "мошенник",
+]
+
+DEFAULT_BAN_REASON = "Оскорбительная лексика в сообщениях"
+DEFAULT_AUTO_BAN_DAYS = 30  # авто-бан на 30 дней (админ может изменить вручную)
+
+
+def _now() -> datetime.datetime:
+    return datetime.datetime.now()
+
+
+def is_user_banned(user_id: int) -> tuple[bool, Optional[dict]]:
+    """Проверяет забанен ли юзер. Возвращает (забанен?, инфа о бане)."""
+    if not user_id:
+        return False, None
+    db = load_db()
+    bans = db.get("bans", [])
+    now = _now()
+    for ban in bans:
+        if ban.get("user_id") != user_id:
+            continue
+        if ban.get("active") is False:
+            continue
+        # Проверяем срок
+        expires = ban.get("expires_at")
+        if expires:
+            try:
+                exp_dt = datetime.datetime.fromisoformat(expires)
+                if exp_dt < now:
+                    # Срок вышел — снимаем
+                    ban["active"] = False
+                    ban["auto_expired_at"] = now.isoformat()
+                    save_db(db)
+                    continue
+            except Exception:
+                pass
+        return True, ban
+    return False, None
+
+
+def ban_user(user_id: int, username: Optional[str], days: Optional[int], reason: str, banned_by: str = "manual") -> dict:
+    """
+    Банит пользователя.
+    days=None → навсегда
+    days=N → на N дней
+    """
+    db = load_db()
+    bans = db.setdefault("bans", [])
+    now = _now()
+    expires = None
+    if days is not None and days > 0:
+        expires = (now + datetime.timedelta(days=days)).isoformat()
+    ban = {
+        "user_id": user_id,
+        "username": username,
+        "reason": reason,
+        "banned_at": now.isoformat(),
+        "expires_at": expires,
+        "days": days,
+        "banned_by": banned_by,
+        "active": True,
+    }
+    bans.append(ban)
+    save_db(db)
+    return ban
+
+
+def unban_user(user_id: int, by: str = "admin") -> bool:
+    """Снимает активные баны с пользователя. Возвращает True если что-то сняли."""
+    db = load_db()
+    changed = False
+    for ban in db.get("bans", []):
+        if ban.get("user_id") == user_id and ban.get("active"):
+            ban["active"] = False
+            ban["unbanned_at"] = _now().isoformat()
+            ban["unbanned_by"] = by
+            changed = True
+    if changed:
+        save_db(db)
+    return changed
+
+
+def find_user_id_by_username(username: str) -> Optional[int]:
+    """Ищет user_id по username (среди тех, кто хоть раз бронировал)."""
+    if not username:
+        return None
+    uname = username.lstrip("@").lower()
+    db = load_db()
+    for b in db.get("bookings", []):
+        bu = (b.get("telegram_username") or "").lstrip("@").lower()
+        if bu == uname and b.get("telegram_user_id"):
+            return b["telegram_user_id"]
+    # Также по сохранённым банам (вдруг забанили username без брони)
+    for ban in db.get("bans", []):
+        bu = (ban.get("username") or "").lstrip("@").lower()
+        if bu == uname and ban.get("user_id"):
+            return ban["user_id"]
+    return None
+
+
+def check_profanity(text: str) -> Optional[str]:
+    """Возвращает найденное стоп-слово, если оно есть в тексте."""
+    if not text:
+        return None
+    t = text.lower().replace("ё", "е")
+    # Нормализуем спецсимволы которыми обычно маскируют мат
+    for ch in "*_-.,@!?":
+        t = t.replace(ch, "")
+    for word in PROFANITY_WORDS:
+        if word.replace("ё", "е") in t:
+            return word
+    return None
+
+
 # ─────────── QR ───────────
 
 def make_qr_image(data: str) -> bytes:
@@ -256,6 +393,33 @@ dp: Optional[Dispatcher] = None
 if BOT_TOKEN:
     bot = Bot(token=BOT_TOKEN)
     dp = Dispatcher(storage=MemoryStorage())
+
+    # ──────── MIDDLEWARE: блокировка забаненных юзеров ────────
+    @dp.update.outer_middleware()
+    async def ban_middleware(handler, event, data):
+        """Полностью игнорирует любые апдейты от забаненных пользователей.
+        Админ исключение — он работает всегда."""
+        user = None
+        if getattr(event, "message", None):
+            user = event.message.from_user
+        elif getattr(event, "callback_query", None):
+            user = event.callback_query.from_user
+
+        if user:
+            # Админ — всегда проходит
+            if ADMIN_CHAT_ID and str(user.id) == str(ADMIN_CHAT_ID):
+                return await handler(event, data)
+            banned, _ = is_user_banned(user.id)
+            if banned:
+                # Тихо игнорируем апдейт. Бот ничего не отвечает.
+                # На колбэки нужно ответить, иначе у юзера будет крутиться загрузка.
+                try:
+                    if getattr(event, "callback_query", None):
+                        await event.callback_query.answer()
+                except Exception:
+                    pass
+                return
+        return await handler(event, data)
 
     # ──────── FSM: пошаговое бронирование в чате ────────
     class BookFSM(StatesGroup):
@@ -293,6 +457,65 @@ if BOT_TOKEN:
         )
         kb.row(KeyboardButton(text="ℹ️ Помощь"))
         return kb.as_markup(resize_keyboard=True, persistent=True)
+
+    async def check_and_autoban(message: types.Message, state: FSMContext) -> bool:
+        """
+        Проверяет сообщение на оскорбления. Если найдено — банит юзера
+        на DEFAULT_AUTO_BAN_DAYS и шлёт уведомление админу.
+        Возвращает True если был автобан (тогда дальше обработку не продолжать).
+        """
+        text = message.text or ""
+        bad = check_profanity(text)
+        if not bad:
+            return False
+        user = message.from_user
+        # Уведомляем админа
+        if ADMIN_CHAT_ID:
+            try:
+                uname = f"@{user.username}" if user.username else f"id {user.id}"
+                full_name = " ".join(filter(None, [user.first_name, user.last_name])) or "—"
+                kb_adm = InlineKeyboardBuilder()
+                kb_adm.row(InlineKeyboardButton(
+                    text="🔓 Разбанить",
+                    callback_data=f"adm:unban:{user.id}"
+                ))
+                await bot.send_message(
+                    chat_id=int(ADMIN_CHAT_ID),
+                    text=(
+                        f"🚫 *Авто-бан*\n"
+                        f"━━━━━━━━━━━━━━\n"
+                        f"👤 {full_name} ({uname})\n"
+                        f"📅 Срок: {DEFAULT_AUTO_BAN_DAYS} дней\n"
+                        f"⚠️ Триггер: `{bad}`\n\n"
+                        f"💬 Сообщение клиента:\n{text[:500]}"
+                    ),
+                    parse_mode="Markdown",
+                    reply_markup=kb_adm.as_markup()
+                )
+            except Exception as e:
+                print(f"[autoban-notify] {e}")
+        # Баним
+        ban_user(
+            user_id=user.id,
+            username=user.username,
+            days=DEFAULT_AUTO_BAN_DAYS,
+            reason=f"Авто-бан: оскорбительная лексика ({bad})",
+            banned_by="auto",
+        )
+        # Сообщаем юзеру (последнее сообщение перед молчанием)
+        try:
+            await message.answer(
+                "⛔ *Доступ к боту ограничен*\n\n"
+                "Ваше сообщение содержит недопустимую лексику. "
+                f"Доступ восстановится автоматически через {DEFAULT_AUTO_BAN_DAYS} дней.\n\n"
+                "Если считаете, что это ошибка, свяжитесь по телефону +7 (996) 959-02-13.",
+                parse_mode="Markdown",
+                reply_markup=ReplyKeyboardRemove()
+            )
+        except Exception:
+            pass
+        await state.clear()
+        return True
 
     @dp.message(CommandStart())
     async def cmd_start(message: types.Message, state: FSMContext):
@@ -539,6 +762,9 @@ if BOT_TOKEN:
         if message.text in menu_buttons:
             await state.clear()
             return
+        # Авто-бан за оскорбления
+        if await check_and_autoban(message, state):
+            return
 
         text = (message.text or "").strip()
         if not text:
@@ -627,7 +853,198 @@ if BOT_TOKEN:
         kb = InlineKeyboardBuilder()
         kb.row(InlineKeyboardButton(text="📋 Активные брони (выдать)", callback_data="adm:active"))
         kb.row(InlineKeyboardButton(text="📅 Брони на сегодня", callback_data="adm:today"))
+        kb.row(InlineKeyboardButton(text="🚫 Список банов", callback_data="adm:banlist"))
         await message.answer(text, parse_mode="Markdown", reply_markup=kb.as_markup())
+
+    # ──────── FSM: ручной бан админом ────────
+    class BanFSM(StatesGroup):
+        username = State()
+        duration = State()
+        reason = State()
+
+    def _is_admin(uid) -> bool:
+        return bool(ADMIN_CHAT_ID and str(uid) == str(ADMIN_CHAT_ID))
+
+    @dp.message(Command("ban"))
+    async def cmd_ban(message: types.Message, state: FSMContext):
+        if not _is_admin(message.from_user.id):
+            await message.answer("⛔ Доступ запрещён.")
+            return
+        # Поддержка варианта /ban @username сразу
+        parts = (message.text or "").split(maxsplit=1)
+        if len(parts) > 1:
+            await state.update_data(username=parts[1].strip())
+            await _ask_ban_duration(message, state)
+            return
+        await state.set_state(BanFSM.username)
+        await message.answer(
+            "🚫 *Бан пользователя*\n\n"
+            "Введите @username или Telegram ID пользователя, которого хотите забанить.\n\n"
+            "_Пользователь должен был хотя бы раз написать боту, чтобы его можно было найти по username._\n\n"
+            "Для отмены — /cancel",
+            parse_mode="Markdown"
+        )
+
+    @dp.message(BanFSM.username)
+    async def ban_fsm_username(message: types.Message, state: FSMContext):
+        if not _is_admin(message.from_user.id):
+            return
+        if message.text == "/cancel":
+            await state.clear()
+            await message.answer("Отменено.")
+            return
+        await state.update_data(username=(message.text or "").strip())
+        await _ask_ban_duration(message, state)
+
+    async def _ask_ban_duration(message: types.Message, state: FSMContext):
+        kb = InlineKeyboardBuilder()
+        kb.row(InlineKeyboardButton(text="📅 1 день", callback_data="banlen:1"))
+        kb.row(InlineKeyboardButton(text="📅 7 дней (неделя)", callback_data="banlen:7"))
+        kb.row(InlineKeyboardButton(text="📅 30 дней (месяц)", callback_data="banlen:30"))
+        kb.row(InlineKeyboardButton(text="♾ Навсегда", callback_data="banlen:forever"))
+        kb.row(InlineKeyboardButton(text="❌ Отмена", callback_data="banlen:cancel"))
+        data = await state.get_data()
+        await message.answer(
+            f"👤 Пользователь: *{data.get('username','?')}*\n\n"
+            f"Выберите срок бана:",
+            parse_mode="Markdown",
+            reply_markup=kb.as_markup()
+        )
+        await state.set_state(BanFSM.duration)
+
+    @dp.callback_query(BanFSM.duration, F.data.startswith("banlen:"))
+    async def ban_fsm_duration(callback: types.CallbackQuery, state: FSMContext):
+        if not _is_admin(callback.from_user.id):
+            await callback.answer("Доступ запрещён", show_alert=True)
+            return
+        choice = callback.data.split(":")[1]
+        await callback.answer()
+        if choice == "cancel":
+            await state.clear()
+            await callback.message.edit_text("❌ Бан отменён.")
+            return
+        days = None if choice == "forever" else int(choice)
+        await state.update_data(days=days)
+        # Делаем бан без причины (можно расширить позже)
+        data = await state.get_data()
+        username = data["username"]
+        # Резолвим username → user_id
+        uname_clean = username.lstrip("@")
+        user_id = None
+        if uname_clean.isdigit():
+            user_id = int(uname_clean)
+        else:
+            user_id = find_user_id_by_username(uname_clean)
+        if not user_id:
+            await callback.message.edit_text(
+                f"❌ Не удалось найти пользователя *{username}*.\n\n"
+                f"Возможно, он ещё ни разу не писал боту.\n"
+                f"Попробуйте указать его Telegram ID напрямую (числом).",
+                parse_mode="Markdown"
+            )
+            await state.clear()
+            return
+
+        ban = ban_user(
+            user_id=user_id,
+            username=uname_clean if not uname_clean.isdigit() else None,
+            days=days,
+            reason=DEFAULT_BAN_REASON,
+            banned_by=f"admin:{callback.from_user.id}",
+        )
+        await state.clear()
+        if days is None:
+            duration_text = "навсегда"
+        else:
+            duration_text = f"на {days} {'день' if days==1 else 'дн.'}"
+        await callback.message.edit_text(
+            f"✅ *Пользователь забанен*\n\n"
+            f"👤 {username} (id {user_id})\n"
+            f"📅 Срок: {duration_text}\n\n"
+            f"Бот не будет реагировать на его сообщения.\n"
+            f"Чтобы разбанить: /unban {user_id} или /unban {username}",
+            parse_mode="Markdown"
+        )
+
+    @dp.message(Command("unban"))
+    async def cmd_unban(message: types.Message):
+        if not _is_admin(message.from_user.id):
+            await message.answer("⛔ Доступ запрещён.")
+            return
+        parts = (message.text or "").split(maxsplit=1)
+        if len(parts) < 2:
+            await message.answer("Использование: `/unban @username` или `/unban 123456789`", parse_mode="Markdown")
+            return
+        target = parts[1].strip().lstrip("@")
+        if target.isdigit():
+            user_id = int(target)
+        else:
+            user_id = find_user_id_by_username(target)
+        if not user_id:
+            await message.answer(f"❌ Пользователь *{target}* не найден.", parse_mode="Markdown")
+            return
+        if unban_user(user_id, by=f"admin:{message.from_user.id}"):
+            await message.answer(f"✅ Пользователь *{target}* (id {user_id}) разбанен.", parse_mode="Markdown")
+        else:
+            await message.answer(f"ℹ️ У пользователя *{target}* нет активных банов.", parse_mode="Markdown")
+
+    @dp.callback_query(F.data.startswith("adm:unban:"))
+    async def adm_unban_button(callback: types.CallbackQuery):
+        if not _is_admin(callback.from_user.id):
+            await callback.answer("Доступ запрещён", show_alert=True)
+            return
+        try:
+            user_id = int(callback.data.split(":")[2])
+        except Exception:
+            await callback.answer("Ошибка", show_alert=True)
+            return
+        if unban_user(user_id, by=f"admin:{callback.from_user.id}"):
+            await callback.answer("✅ Разбанен", show_alert=True)
+            try:
+                await callback.message.edit_text(
+                    callback.message.text + "\n\n☑️ *Разбанен админом*",
+                    parse_mode="Markdown"
+                )
+            except Exception:
+                pass
+        else:
+            await callback.answer("Нет активных банов", show_alert=True)
+
+    @dp.callback_query(F.data == "adm:banlist")
+    async def adm_banlist(callback: types.CallbackQuery):
+        if not _is_admin(callback.from_user.id):
+            await callback.answer("Доступ запрещён", show_alert=True)
+            return
+        db = load_db()
+        active_bans = [b for b in db.get("bans", []) if b.get("active")]
+        if not active_bans:
+            await callback.answer("Нет активных банов", show_alert=True)
+            return
+        await callback.answer()
+        for b in active_bans[-20:]:
+            uname = b.get("username") or "—"
+            expires = b.get("expires_at")
+            if expires:
+                try:
+                    exp_dt = datetime.datetime.fromisoformat(expires)
+                    expires_str = exp_dt.strftime("%d.%m.%Y %H:%M")
+                except Exception:
+                    expires_str = "—"
+            else:
+                expires_str = "♾ навсегда"
+            text = (
+                f"🚫 `id {b['user_id']}`\n"
+                f"👤 @{uname}\n"
+                f"📅 До: {expires_str}\n"
+                f"⚠️ Причина: {b.get('reason','—')}\n"
+                f"👮 Кем: {b.get('banned_by','—')}"
+            )
+            kb_b = InlineKeyboardBuilder()
+            kb_b.row(InlineKeyboardButton(
+                text="🔓 Разбанить",
+                callback_data=f"adm:unban:{b['user_id']}"
+            ))
+            await callback.message.answer(text, parse_mode="Markdown", reply_markup=kb_b.as_markup())
 
     @dp.callback_query(F.data == "adm:active")
     async def adm_active(callback: types.CallbackQuery):
@@ -653,7 +1070,28 @@ if BOT_TOKEN:
                 text="✅ Выдан — отправить отзыв и промокод",
                 callback_data=f"adm:pickup:{b['booking_id']}"
             ))
+            if b.get("telegram_user_id"):
+                kb_b.row(InlineKeyboardButton(
+                    text="🚫 Забанить клиента",
+                    callback_data=f"adm:banbk:{b['telegram_user_id']}"
+                ))
             await callback.message.answer(text, parse_mode="Markdown", reply_markup=kb_b.as_markup())
+        await callback.answer()
+
+    @dp.callback_query(F.data.startswith("adm:banbk:"))
+    async def adm_ban_by_button(callback: types.CallbackQuery, state: FSMContext):
+        """Забан кнопкой из списка активных броней."""
+        if not _is_admin(callback.from_user.id):
+            await callback.answer("Доступ запрещён", show_alert=True)
+            return
+        try:
+            user_id = int(callback.data.split(":")[2])
+        except Exception:
+            await callback.answer("Ошибка", show_alert=True)
+            return
+        # Запоминаем id и спрашиваем срок
+        await state.update_data(username=str(user_id))
+        await _ask_ban_duration(callback.message, state)
         await callback.answer()
 
     @dp.callback_query(F.data.startswith("adm:pickup:"))
@@ -1304,6 +1742,8 @@ if BOT_TOKEN:
 
     @dp.message(BookFSM.name)
     async def bt_name_text(message: types.Message, state: FSMContext):
+        if await check_and_autoban(message, state):
+            return
         name = (message.text or "").strip()
         if len(name) < 2:
             await message.answer("Имя слишком короткое, введите ещё раз:")
@@ -1799,77 +2239,6 @@ def root():
     if Path("index.html").exists():
         return FileResponse("index.html")
     return {"status": "ok"}
-
-
-# ─────────── SEO: FAVICON / SITEMAP / ROBOTS ───────────
-
-SITE_URL = "https://lock39.ru"
-
-
-@app.get("/favicon.ico", include_in_schema=False)
-def favicon_ico():
-    return FileResponse("favicon.ico")
-
-
-@app.get("/favicon.svg", include_in_schema=False)
-def favicon_svg():
-    return FileResponse("favicon.svg", media_type="image/svg+xml")
-
-
-@app.get("/favicon-96x96.png", include_in_schema=False)
-def favicon_96():
-    return FileResponse("favicon-96x96.png", media_type="image/png")
-
-
-@app.get("/apple-touch-icon.png", include_in_schema=False)
-def apple_touch_icon():
-    return FileResponse("apple-touch-icon.png", media_type="image/png")
-
-
-@app.get("/site.webmanifest", include_in_schema=False)
-def webmanifest():
-    return FileResponse("site.webmanifest", media_type="application/manifest+json")
-
-
-@app.get("/web-app-manifest-192x192.png", include_in_schema=False)
-def web_manifest_192():
-    return FileResponse("web-app-manifest-192x192.png", media_type="image/png")
-
-
-@app.get("/web-app-manifest-512x512.png", include_in_schema=False)
-def web_manifest_512():
-    return FileResponse("web-app-manifest-512x512.png", media_type="image/png")
-
-
-@app.get("/robots.txt", response_class=PlainTextResponse, include_in_schema=False)
-def robots_txt():
-    """robots.txt — разрешаем индексировать всё, кроме API и приватных страниц."""
-    return (
-        "User-agent: *\n"
-        "Allow: /\n"
-        "Disallow: /api/\n"
-        "Disallow: /app\n"
-        "Disallow: /b/\n"
-        "\n"
-        f"Sitemap: {SITE_URL}/sitemap.xml\n"
-    )
-
-
-@app.get("/sitemap.xml", include_in_schema=False)
-def sitemap_xml():
-    """sitemap.xml — карта сайта для поисковиков."""
-    today = datetime.date.today().isoformat()
-    xml = f"""<?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <url>
-    <loc>{SITE_URL}/</loc>
-    <lastmod>{today}</lastmod>
-    <changefreq>weekly</changefreq>
-    <priority>1.0</priority>
-  </url>
-</urlset>
-"""
-    return Response(content=xml, media_type="application/xml")
 
 
 @app.get("/app")
