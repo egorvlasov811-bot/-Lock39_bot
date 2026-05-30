@@ -13,14 +13,14 @@ from contextlib import asynccontextmanager
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 import uvicorn
 
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart, Command
-from aiogram.types import InlineKeyboardButton, WebAppInfo, BufferedInputFile, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, BotCommand
+from aiogram.types import InlineKeyboardButton, WebAppInfo, BufferedInputFile, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, BotCommand, BotCommandScopeChat
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -31,10 +31,59 @@ import qrcode
 # ─────────── НАСТРОЙКИ ───────────
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 WEBAPP_URL = os.getenv("WEBAPP_URL", "")
-ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID", "")
 PORT = int(os.getenv("PORT", "8000"))
 DB_FILE = "bookings.json"
 TOTAL_PLACES = 500
+
+
+# ─────────── АДМИНЫ ───────────
+# MAIN_ADMIN_ID — главный админ (владелец). Может всё, получает личные
+# сообщения от клиентов через /contact.
+# ADMIN_IDS — список через запятую: "111,222,333". Видят брони, получают
+# уведомления о новых бронях/отменах/no-show и могут управлять бронями.
+# Главный админ автоматически добавляется в ADMIN_IDS.
+# Для обратной совместимости: если задан старый ADMIN_CHAT_ID — используем его как MAIN_ADMIN_ID.
+
+def _parse_int_or_zero(s: str) -> int:
+    try:
+        return int((s or "").strip())
+    except (TypeError, ValueError):
+        return 0
+
+
+def _parse_admin_id_list(s: str) -> set:
+    ids = set()
+    for part in (s or "").replace(";", ",").split(","):
+        n = _parse_int_or_zero(part)
+        if n:
+            ids.add(n)
+    return ids
+
+
+MAIN_ADMIN_ID: int = _parse_int_or_zero(os.getenv("MAIN_ADMIN_ID", "")) \
+                     or _parse_int_or_zero(os.getenv("ADMIN_CHAT_ID", ""))
+ADMIN_IDS: set = _parse_admin_id_list(os.getenv("ADMIN_IDS", ""))
+if MAIN_ADMIN_ID:
+    ADMIN_IDS.add(MAIN_ADMIN_ID)
+
+# Старая переменная — оставляем как алиас на главного, чтобы не ломать вызовы.
+ADMIN_CHAT_ID = str(MAIN_ADMIN_ID) if MAIN_ADMIN_ID else ""
+
+
+def is_admin(user_id) -> bool:
+    """Любой админ (главный или приёмщик)."""
+    try:
+        return int(user_id) in ADMIN_IDS
+    except (TypeError, ValueError):
+        return False
+
+
+def is_main_admin(user_id) -> bool:
+    """Только главный админ (владелец)."""
+    try:
+        return MAIN_ADMIN_ID != 0 and int(user_id) == MAIN_ADMIN_ID
+    except (TypeError, ValueError):
+        return False
 
 # ─────────── ИНФО О КАМЕРЕ ХРАНЕНИЯ ───────────
 ADDRESS = "г. Зеленоградск, ул. Железнодорожная, 2Б корп. 1"
@@ -236,174 +285,6 @@ def calc_booking_end(booking: dict) -> Optional[datetime.datetime]:
         return None
 
 
-# ─────────── БАНЫ И МОДЕРАЦИЯ ───────────
-
-# Стоп-слова для авто-бана. Списки сделаны мягкими — реагируют на оскорбления,
-# угрозы, мат в адрес сервиса. Если попадётся ложное срабатывание — админ
-# всегда может разбанить вручную через /admin.
-PROFANITY_WORDS = [
-    # Мат (базовые корни — этого достаточно для большинства производных)
-    "хуй", "хуя", "хуе", "хуи", "хую",
-    "пизд", "пезд",
-    "ебал", "ебат", "ебан", "ебуч", "ебло", "ебуч", "ёбан", "ёбал",
-    "блядь", "блять", "бляд",
-    "сука", "суки", "суке",
-    "пидор", "пидар", "педик",
-    "мудак", "мудил", "мудач",
-    "залуп", "хер", "херов", "хрен",
-    "гондон", "уебок", "уёбок", "уебк", "уёбк",
-    "долбоеб", "долбоёб", "долбаеб", "долбаёб",
-    "чмо", "ублюд",
-    # Оскорбления/угрозы
-    "идиот", "дебил", "имбецил", "тупой", "тупица",
-    "урод", "придурок", "кретин",
-    "убью", "сдохн", "сдохни", "умри", "удавись",
-    "обмани", "обманул", "лохотрон", "разводи", "развод",
-    "мошенник",
-]
-
-DEFAULT_BAN_REASON = "Оскорбительная лексика в сообщениях"
-DEFAULT_AUTO_BAN_DAYS = 30  # авто-бан на 30 дней (админ может изменить вручную)
-
-
-def _now() -> datetime.datetime:
-    return datetime.datetime.now()
-
-
-def is_user_banned(user_id: int, username: Optional[str] = None) -> tuple[bool, Optional[dict]]:
-    """Проверяет забанен ли юзер. Проверка по user_id ИЛИ username.
-    Возвращает (забанен?, инфа о бане)."""
-    if not user_id and not username:
-        return False, None
-    db = load_db()
-    bans = db.get("bans", [])
-    now = _now()
-    uname_clean = (username or "").lstrip("@").lower() if username else None
-    changed = False
-    for ban in bans:
-        if ban.get("active") is False:
-            continue
-
-        # Проверяем по user_id
-        match_by_id = user_id and ban.get("user_id") == user_id
-        # Проверяем по username (для проактивных банов без user_id)
-        ban_uname = (ban.get("username") or "").lstrip("@").lower()
-        match_by_uname = uname_clean and ban_uname and ban_uname == uname_clean
-
-        if not (match_by_id or match_by_uname):
-            continue
-
-        # Проверяем срок
-        expires = ban.get("expires_at")
-        if expires:
-            try:
-                exp_dt = datetime.datetime.fromisoformat(expires)
-                if exp_dt < now:
-                    # Срок вышел — снимаем
-                    ban["active"] = False
-                    ban["auto_expired_at"] = now.isoformat()
-                    changed = True
-                    continue
-            except Exception:
-                pass
-
-        # Если забанили по username, но теперь знаем user_id — запишем
-        if match_by_uname and not ban.get("user_id") and user_id:
-            ban["user_id"] = user_id
-            changed = True
-
-        if changed:
-            save_db(db)
-        return True, ban
-
-    if changed:
-        save_db(db)
-    return False, None
-
-
-def ban_user(user_id: int, username: Optional[str], days: Optional[int], reason: str, banned_by: str = "manual") -> dict:
-    """
-    Банит пользователя.
-    days=None → навсегда
-    days=N → на N дней
-    """
-    db = load_db()
-    bans = db.setdefault("bans", [])
-    now = _now()
-    expires = None
-    if days is not None and days > 0:
-        expires = (now + datetime.timedelta(days=days)).isoformat()
-    ban = {
-        "user_id": user_id,
-        "username": username,
-        "reason": reason,
-        "banned_at": now.isoformat(),
-        "expires_at": expires,
-        "days": days,
-        "banned_by": banned_by,
-        "active": True,
-    }
-    bans.append(ban)
-    save_db(db)
-    return ban
-
-
-def unban_user(user_id: Optional[int] = None, username: Optional[str] = None, by: str = "admin") -> bool:
-    """Снимает активные баны с пользователя по user_id или username.
-    Возвращает True если что-то сняли."""
-    if not user_id and not username:
-        return False
-    db = load_db()
-    changed = False
-    uname_clean = (username or "").lstrip("@").lower() if username else None
-    for ban in db.get("bans", []):
-        if not ban.get("active"):
-            continue
-        match_by_id = user_id and ban.get("user_id") == user_id
-        ban_uname = (ban.get("username") or "").lstrip("@").lower()
-        match_by_uname = uname_clean and ban_uname and ban_uname == uname_clean
-        if match_by_id or match_by_uname:
-            ban["active"] = False
-            ban["unbanned_at"] = _now().isoformat()
-            ban["unbanned_by"] = by
-            changed = True
-    if changed:
-        save_db(db)
-    return changed
-
-
-def find_user_id_by_username(username: str) -> Optional[int]:
-    """Ищет user_id по username (среди тех, кто хоть раз бронировал)."""
-    if not username:
-        return None
-    uname = username.lstrip("@").lower()
-    db = load_db()
-    for b in db.get("bookings", []):
-        bu = (b.get("telegram_username") or "").lstrip("@").lower()
-        if bu == uname and b.get("telegram_user_id"):
-            return b["telegram_user_id"]
-    # Также по сохранённым банам (вдруг забанили username без брони)
-    for ban in db.get("bans", []):
-        bu = (ban.get("username") or "").lstrip("@").lower()
-        if bu == uname and ban.get("user_id"):
-            return ban["user_id"]
-    return None
-
-
-def check_profanity(text: str) -> Optional[str]:
-    """Возвращает найденное стоп-слово, если оно есть в тексте."""
-    if not text:
-        return None
-    t = text.lower().replace("ё", "е")
-    # Нормализуем спецсимволы которыми обычно маскируют мат
-    for ch in "*_-.,@!?":
-        t = t.replace(ch, "")
-    for word in PROFANITY_WORDS:
-        if word.replace("ё", "е") in t:
-            return word
-    return None
-
-
 # ─────────── QR ───────────
 
 def make_qr_image(data: str) -> bytes:
@@ -424,33 +305,6 @@ dp: Optional[Dispatcher] = None
 if BOT_TOKEN:
     bot = Bot(token=BOT_TOKEN)
     dp = Dispatcher(storage=MemoryStorage())
-
-    # ──────── MIDDLEWARE: блокировка забаненных юзеров ────────
-    @dp.update.outer_middleware()
-    async def ban_middleware(handler, event, data):
-        """Полностью игнорирует любые апдейты от забаненных пользователей.
-        Админ исключение — он работает всегда."""
-        user = None
-        if getattr(event, "message", None):
-            user = event.message.from_user
-        elif getattr(event, "callback_query", None):
-            user = event.callback_query.from_user
-
-        if user:
-            # Админ — всегда проходит
-            if ADMIN_CHAT_ID and str(user.id) == str(ADMIN_CHAT_ID):
-                return await handler(event, data)
-            banned, _ = is_user_banned(user.id, user.username)
-            if banned:
-                # Тихо игнорируем апдейт. Бот ничего не отвечает.
-                # На колбэки нужно ответить, иначе у юзера будет крутиться загрузка.
-                try:
-                    if getattr(event, "callback_query", None):
-                        await event.callback_query.answer()
-                except Exception:
-                    pass
-                return
-        return await handler(event, data)
 
     # ──────── FSM: пошаговое бронирование в чате ────────
     class BookFSM(StatesGroup):
@@ -488,65 +342,6 @@ if BOT_TOKEN:
         )
         kb.row(KeyboardButton(text="ℹ️ Помощь"))
         return kb.as_markup(resize_keyboard=True, persistent=True)
-
-    async def check_and_autoban(message: types.Message, state: FSMContext) -> bool:
-        """
-        Проверяет сообщение на оскорбления. Если найдено — банит юзера
-        на DEFAULT_AUTO_BAN_DAYS и шлёт уведомление админу.
-        Возвращает True если был автобан (тогда дальше обработку не продолжать).
-        """
-        text = message.text or ""
-        bad = check_profanity(text)
-        if not bad:
-            return False
-        user = message.from_user
-        # Уведомляем админа
-        if ADMIN_CHAT_ID:
-            try:
-                uname = f"@{user.username}" if user.username else f"id {user.id}"
-                full_name = " ".join(filter(None, [user.first_name, user.last_name])) or "—"
-                kb_adm = InlineKeyboardBuilder()
-                kb_adm.row(InlineKeyboardButton(
-                    text="🔓 Разбанить",
-                    callback_data=f"adm:unban:{user.id}"
-                ))
-                await bot.send_message(
-                    chat_id=int(ADMIN_CHAT_ID),
-                    text=(
-                        f"🚫 *Авто-бан*\n"
-                        f"━━━━━━━━━━━━━━\n"
-                        f"👤 {full_name} ({uname})\n"
-                        f"📅 Срок: {DEFAULT_AUTO_BAN_DAYS} дней\n"
-                        f"⚠️ Триггер: `{bad}`\n\n"
-                        f"💬 Сообщение клиента:\n{text[:500]}"
-                    ),
-                    parse_mode="Markdown",
-                    reply_markup=kb_adm.as_markup()
-                )
-            except Exception as e:
-                print(f"[autoban-notify] {e}")
-        # Баним
-        ban_user(
-            user_id=user.id,
-            username=user.username,
-            days=DEFAULT_AUTO_BAN_DAYS,
-            reason=f"Авто-бан: оскорбительная лексика ({bad})",
-            banned_by="auto",
-        )
-        # Сообщаем юзеру (последнее сообщение перед молчанием)
-        try:
-            await message.answer(
-                "⛔ *Доступ к боту ограничен*\n\n"
-                "Ваше сообщение содержит недопустимую лексику. "
-                f"Доступ восстановится автоматически через {DEFAULT_AUTO_BAN_DAYS} дней.\n\n"
-                "Если считаете, что это ошибка, свяжитесь по телефону +7 (996) 959-02-13.",
-                parse_mode="Markdown",
-                reply_markup=ReplyKeyboardRemove()
-            )
-        except Exception:
-            pass
-        await state.clear()
-        return True
 
     @dp.message(CommandStart())
     async def cmd_start(message: types.Message, state: FSMContext):
@@ -793,17 +588,14 @@ if BOT_TOKEN:
         if message.text in menu_buttons:
             await state.clear()
             return
-        # Авто-бан за оскорбления
-        if await check_and_autoban(message, state):
-            return
 
         text = (message.text or "").strip()
         if not text:
             await message.answer("Сообщение пустое. Напишите текст:")
             return
 
-        # Пересылаем админу
-        if ADMIN_CHAT_ID:
+        # Пересылаем всем админам
+        if ADMIN_IDS:
             try:
                 user = message.from_user
                 user_info = f"@{user.username}" if user.username else f"id {user.id}"
@@ -814,16 +606,14 @@ if BOT_TOKEN:
                     text="💬 Ответить клиенту",
                     url=f"tg://user?id={user.id}"
                 ))
-                await bot.send_message(
-                    chat_id=int(ADMIN_CHAT_ID),
-                    text=(
+                sent = await broadcast_to_admins(
+                    (
                         f"📩 *Сообщение от клиента*\n"
                         f"━━━━━━━━━━━━━━\n"
                         f"👤 {name} ({user_info})\n\n"
                         f"💬 {text}"
                     ),
-                    parse_mode="Markdown",
-                    reply_markup=rkb.as_markup()
+                    reply_markup=rkb.as_markup(),
                 )
                 await message.answer(
                     "✅ Спасибо! Ваше сообщение отправлено.\n"
@@ -842,7 +632,7 @@ if BOT_TOKEN:
     # ──────── /admin — мини-CRM (только для админа) ────────
     @dp.message(Command("admin"))
     async def cmd_admin(message: types.Message):
-        if not ADMIN_CHAT_ID or str(message.from_user.id) != str(ADMIN_CHAT_ID):
+        if not is_admin(message.from_user.id):
             await message.answer("⛔ Доступ запрещён.")
             return
         db = load_db()
@@ -884,201 +674,11 @@ if BOT_TOKEN:
         kb = InlineKeyboardBuilder()
         kb.row(InlineKeyboardButton(text="📋 Активные брони (выдать)", callback_data="adm:active"))
         kb.row(InlineKeyboardButton(text="📅 Брони на сегодня", callback_data="adm:today"))
-        kb.row(InlineKeyboardButton(text="🚫 Список банов", callback_data="adm:banlist"))
         await message.answer(text, parse_mode="Markdown", reply_markup=kb.as_markup())
-
-    # ──────── FSM: ручной бан админом ────────
-    class BanFSM(StatesGroup):
-        username = State()
-        duration = State()
-        reason = State()
-
-    def _is_admin(uid) -> bool:
-        return bool(ADMIN_CHAT_ID and str(uid) == str(ADMIN_CHAT_ID))
-
-    @dp.message(Command("ban"))
-    async def cmd_ban(message: types.Message, state: FSMContext):
-        if not _is_admin(message.from_user.id):
-            await message.answer("⛔ Доступ запрещён.")
-            return
-        # Поддержка варианта /ban @username сразу
-        parts = (message.text or "").split(maxsplit=1)
-        if len(parts) > 1:
-            await state.update_data(username=parts[1].strip())
-            await _ask_ban_duration(message, state)
-            return
-        await state.set_state(BanFSM.username)
-        await message.answer(
-            "🚫 *Бан пользователя*\n\n"
-            "Введите @username или Telegram ID пользователя, которого хотите забанить.\n\n"
-            "_Пользователь должен был хотя бы раз написать боту, чтобы его можно было найти по username._\n\n"
-            "Для отмены — /cancel",
-            parse_mode="Markdown"
-        )
-
-    @dp.message(BanFSM.username)
-    async def ban_fsm_username(message: types.Message, state: FSMContext):
-        if not _is_admin(message.from_user.id):
-            return
-        if message.text == "/cancel":
-            await state.clear()
-            await message.answer("Отменено.")
-            return
-        await state.update_data(username=(message.text or "").strip())
-        await _ask_ban_duration(message, state)
-
-    async def _ask_ban_duration(message: types.Message, state: FSMContext):
-        kb = InlineKeyboardBuilder()
-        kb.row(InlineKeyboardButton(text="📅 1 день", callback_data="banlen:1"))
-        kb.row(InlineKeyboardButton(text="📅 7 дней (неделя)", callback_data="banlen:7"))
-        kb.row(InlineKeyboardButton(text="📅 30 дней (месяц)", callback_data="banlen:30"))
-        kb.row(InlineKeyboardButton(text="♾ Навсегда", callback_data="banlen:forever"))
-        kb.row(InlineKeyboardButton(text="❌ Отмена", callback_data="banlen:cancel"))
-        data = await state.get_data()
-        await message.answer(
-            f"👤 Пользователь: *{data.get('username','?')}*\n\n"
-            f"Выберите срок бана:",
-            parse_mode="Markdown",
-            reply_markup=kb.as_markup()
-        )
-        await state.set_state(BanFSM.duration)
-
-    @dp.callback_query(BanFSM.duration, F.data.startswith("banlen:"))
-    async def ban_fsm_duration(callback: types.CallbackQuery, state: FSMContext):
-        if not _is_admin(callback.from_user.id):
-            await callback.answer("Доступ запрещён", show_alert=True)
-            return
-        choice = callback.data.split(":")[1]
-        await callback.answer()
-        if choice == "cancel":
-            await state.clear()
-            await callback.message.edit_text("❌ Бан отменён.")
-            return
-        days = None if choice == "forever" else int(choice)
-        await state.update_data(days=days)
-        data = await state.get_data()
-        username = data["username"]
-        # Резолвим username → user_id (если возможно)
-        uname_clean = username.lstrip("@")
-        user_id = None
-        if uname_clean.isdigit():
-            user_id = int(uname_clean)
-            stored_username = None
-        else:
-            user_id = find_user_id_by_username(uname_clean)
-            stored_username = uname_clean
-
-        # Бан можно сделать даже без user_id — middleware будет ловить по username
-        # как только этот юзер впервые напишет боту
-        ban = ban_user(
-            user_id=user_id,
-            username=stored_username,
-            days=days,
-            reason=DEFAULT_BAN_REASON,
-            banned_by=f"admin:{callback.from_user.id}",
-        )
-        await state.clear()
-        if days is None:
-            duration_text = "навсегда"
-        else:
-            duration_text = f"на {days} {'день' if days==1 else 'дн.'}"
-
-        if user_id:
-            identity = f"{username} (id {user_id})"
-            unban_hint = f"/unban {user_id} или /unban {username}"
-        else:
-            identity = f"{username} _(user_id пока неизвестен)_"
-            unban_hint = f"/unban {username}"
-
-        await callback.message.edit_text(
-            f"✅ *Пользователь забанен*\n\n"
-            f"👤 {identity}\n"
-            f"📅 Срок: {duration_text}\n\n"
-            f"Бот не будет реагировать на его сообщения "
-            f"{'сразу' if user_id else 'как только он впервые попытается написать'}.\n\n"
-            f"Разбанить: {unban_hint}",
-            parse_mode="Markdown"
-        )
-
-    @dp.message(Command("unban"))
-    async def cmd_unban(message: types.Message):
-        if not _is_admin(message.from_user.id):
-            await message.answer("⛔ Доступ запрещён.")
-            return
-        parts = (message.text or "").split(maxsplit=1)
-        if len(parts) < 2:
-            await message.answer("Использование: `/unban @username` или `/unban 123456789`", parse_mode="Markdown")
-            return
-        target = parts[1].strip().lstrip("@")
-        user_id = int(target) if target.isdigit() else None
-        username = None if target.isdigit() else target
-
-        if unban_user(user_id=user_id, username=username, by=f"admin:{message.from_user.id}"):
-            await message.answer(f"✅ Пользователь *{target}* разбанен.", parse_mode="Markdown")
-        else:
-            await message.answer(f"ℹ️ У пользователя *{target}* нет активных банов.", parse_mode="Markdown")
-
-    @dp.callback_query(F.data.startswith("adm:unban:"))
-    async def adm_unban_button(callback: types.CallbackQuery):
-        if not _is_admin(callback.from_user.id):
-            await callback.answer("Доступ запрещён", show_alert=True)
-            return
-        try:
-            user_id = int(callback.data.split(":")[2])
-        except Exception:
-            await callback.answer("Ошибка", show_alert=True)
-            return
-        if unban_user(user_id=user_id, by=f"admin:{callback.from_user.id}"):
-            await callback.answer("✅ Разбанен", show_alert=True)
-            try:
-                await callback.message.edit_text(
-                    callback.message.text + "\n\n☑️ *Разбанен админом*",
-                    parse_mode="Markdown"
-                )
-            except Exception:
-                pass
-        else:
-            await callback.answer("Нет активных банов", show_alert=True)
-
-    @dp.callback_query(F.data == "adm:banlist")
-    async def adm_banlist(callback: types.CallbackQuery):
-        if not _is_admin(callback.from_user.id):
-            await callback.answer("Доступ запрещён", show_alert=True)
-            return
-        db = load_db()
-        active_bans = [b for b in db.get("bans", []) if b.get("active")]
-        if not active_bans:
-            await callback.answer("Нет активных банов", show_alert=True)
-            return
-        await callback.answer()
-        for b in active_bans[-20:]:
-            uname = b.get("username") or "—"
-            expires = b.get("expires_at")
-            if expires:
-                try:
-                    exp_dt = datetime.datetime.fromisoformat(expires)
-                    expires_str = exp_dt.strftime("%d.%m.%Y %H:%M")
-                except Exception:
-                    expires_str = "—"
-            else:
-                expires_str = "♾ навсегда"
-            text = (
-                f"🚫 `id {b['user_id']}`\n"
-                f"👤 @{uname}\n"
-                f"📅 До: {expires_str}\n"
-                f"⚠️ Причина: {b.get('reason','—')}\n"
-                f"👮 Кем: {b.get('banned_by','—')}"
-            )
-            kb_b = InlineKeyboardBuilder()
-            kb_b.row(InlineKeyboardButton(
-                text="🔓 Разбанить",
-                callback_data=f"adm:unban:{b['user_id']}"
-            ))
-            await callback.message.answer(text, parse_mode="Markdown", reply_markup=kb_b.as_markup())
 
     @dp.callback_query(F.data == "adm:active")
     async def adm_active(callback: types.CallbackQuery):
-        if not ADMIN_CHAT_ID or str(callback.from_user.id) != str(ADMIN_CHAT_ID):
+        if not is_admin(callback.from_user.id):
             await callback.answer("Доступ запрещён", show_alert=True)
             return
         db = load_db()
@@ -1100,34 +700,13 @@ if BOT_TOKEN:
                 text="✅ Выдан — отправить отзыв и промокод",
                 callback_data=f"adm:pickup:{b['booking_id']}"
             ))
-            if b.get("telegram_user_id"):
-                kb_b.row(InlineKeyboardButton(
-                    text="🚫 Забанить клиента",
-                    callback_data=f"adm:banbk:{b['telegram_user_id']}"
-                ))
             await callback.message.answer(text, parse_mode="Markdown", reply_markup=kb_b.as_markup())
-        await callback.answer()
-
-    @dp.callback_query(F.data.startswith("adm:banbk:"))
-    async def adm_ban_by_button(callback: types.CallbackQuery, state: FSMContext):
-        """Забан кнопкой из списка активных броней."""
-        if not _is_admin(callback.from_user.id):
-            await callback.answer("Доступ запрещён", show_alert=True)
-            return
-        try:
-            user_id = int(callback.data.split(":")[2])
-        except Exception:
-            await callback.answer("Ошибка", show_alert=True)
-            return
-        # Запоминаем id и спрашиваем срок
-        await state.update_data(username=str(user_id))
-        await _ask_ban_duration(callback.message, state)
         await callback.answer()
 
     @dp.callback_query(F.data.startswith("adm:pickup:"))
     async def adm_pickup(callback: types.CallbackQuery):
         """Ручная выдача багажа — шлёт юзеру отзыв и промокод."""
-        if not ADMIN_CHAT_ID or str(callback.from_user.id) != str(ADMIN_CHAT_ID):
+        if not is_admin(callback.from_user.id):
             await callback.answer("Доступ запрещён", show_alert=True)
             return
         bid = callback.data.split(":", 2)[2]
@@ -1161,7 +740,7 @@ if BOT_TOKEN:
 
     @dp.callback_query(F.data == "adm:today")
     async def adm_today(callback: types.CallbackQuery):
-        if not ADMIN_CHAT_ID or str(callback.from_user.id) != str(ADMIN_CHAT_ID):
+        if not is_admin(callback.from_user.id):
             await callback.answer("Доступ запрещён", show_alert=True)
             return
         db = load_db()
@@ -1181,6 +760,294 @@ if BOT_TOKEN:
             )
             await callback.message.answer(text, parse_mode="Markdown")
         await callback.answer()
+
+    # ──────── РАСШИРЕННАЯ CRM ДЛЯ АДМИНОВ ────────
+
+    def _booking_short_line(b: dict) -> str:
+        """Однострочный формат брони для списков."""
+        st = {"active": "🟢", "cancelled": "❌", "completed": "✅"}.get(b.get("status", "active"), "•")
+        place = b.get("place_num", "—")
+        items = b.get("items", 1)
+        time = b.get("time") or "—"
+        total = b.get("total", 0)
+        return (
+            f"{st} `{b['booking_id']}` №{place} · {items}шт · {time}\n"
+            f"   👤 {b.get('name','—')} · 📞 {b.get('phone','—')} · 💵 {total:,}₽"
+        )
+
+    async def _send_bookings_list(message: types.Message, bookings: list, title: str):
+        """Отправляет админу список броней с разбивкой по 10 в сообщении."""
+        if not bookings:
+            await message.answer(f"{title}\n\n_Броней нет._", parse_mode="Markdown")
+            return
+        # Сортировка: по дате, потом по времени
+        bookings = sorted(bookings, key=lambda x: (x.get("date", ""), x.get("time") or "00:00"))
+        header = f"{title}\n_Всего: {len(bookings)}_\n━━━━━━━━━━━━━━\n"
+        lines = [header]
+        for b in bookings:
+            line = _booking_short_line(b)
+            # Дата строкой, если в списке смешано несколько дней
+            line = f"📅 {fmt_date_ru(b.get('date','—'))}\n" + line
+            lines.append(line)
+            if sum(len(x) for x in lines) > 3500:
+                await message.answer("\n\n".join(lines), parse_mode="Markdown")
+                lines = []
+        if lines:
+            await message.answer("\n\n".join(lines), parse_mode="Markdown")
+
+    @dp.message(Command("today"))
+    async def cmd_today(message: types.Message):
+        if not is_admin(message.from_user.id):
+            await message.answer("⛔ Доступ запрещён.")
+            return
+        today = datetime.date.today().isoformat()
+        bookings = [b for b in load_db().get("bookings", []) if b.get("date") == today]
+        await _send_bookings_list(message, bookings, f"📅 *Брони на сегодня* ({fmt_date_ru(today)})")
+
+    @dp.message(Command("tomorrow"))
+    async def cmd_tomorrow(message: types.Message):
+        if not is_admin(message.from_user.id):
+            await message.answer("⛔ Доступ запрещён.")
+            return
+        tomorrow = (datetime.date.today() + datetime.timedelta(days=1)).isoformat()
+        bookings = [b for b in load_db().get("bookings", []) if b.get("date") == tomorrow]
+        await _send_bookings_list(message, bookings, f"📅 *Брони на завтра* ({fmt_date_ru(tomorrow)})")
+
+    @dp.message(Command("week"))
+    async def cmd_week(message: types.Message):
+        if not is_admin(message.from_user.id):
+            await message.answer("⛔ Доступ запрещён.")
+            return
+        today = datetime.date.today()
+        end = today + datetime.timedelta(days=7)
+        bookings = [b for b in load_db().get("bookings", [])
+                    if b.get("date") and today.isoformat() <= b["date"] <= end.isoformat()]
+        await _send_bookings_list(
+            message, bookings,
+            f"📅 *Брони на неделю* ({fmt_date_ru(today.isoformat())} — {fmt_date_ru(end.isoformat())})"
+        )
+
+    @dp.message(Command("stats"))
+    async def cmd_stats(message: types.Message):
+        if not is_admin(message.from_user.id):
+            await message.answer("⛔ Доступ запрещён.")
+            return
+        bookings = load_db().get("bookings", [])
+        today = datetime.date.today()
+        week_ago = (today - datetime.timedelta(days=7)).isoformat()
+        month_ago = (today - datetime.timedelta(days=30)).isoformat()
+
+        def stats_for(filter_fn) -> dict:
+            bs = [b for b in bookings if filter_fn(b)]
+            revenue = sum(b.get("total", 0) for b in bs if b.get("status") in ("active", "completed"))
+            return {
+                "total": len(bs),
+                "active": sum(1 for b in bs if b.get("status") == "active"),
+                "completed": sum(1 for b in bs if b.get("status") == "completed"),
+                "cancelled": sum(1 for b in bs if b.get("status") == "cancelled"),
+                "revenue": revenue,
+                "items": sum(b.get("items", 0) for b in bs if b.get("status") in ("active", "completed")),
+            }
+
+        s_today = stats_for(lambda b: b.get("date") == today.isoformat())
+        s_week = stats_for(lambda b: b.get("date") and b["date"] >= week_ago)
+        s_month = stats_for(lambda b: b.get("date") and b["date"] >= month_ago)
+        occupied = count_active_today()
+
+        def fmt(s, label):
+            return (
+                f"*{label}*\n"
+                f"  💵 Выручка: *{s['revenue']:,} ₽*\n"
+                f"  📋 Броней: {s['total']} (🟢{s['active']} ✅{s['completed']} ❌{s['cancelled']})\n"
+                f"  🎒 Мест занято: {s['items']}\n"
+            )
+
+        text = (
+            f"📊 *Статистика*\n"
+            f"━━━━━━━━━━━━━━━━━━\n\n"
+            f"📦 *Сейчас занято:* {occupied} из {TOTAL_PLACES} мест\n\n"
+            f"{fmt(s_today, 'Сегодня')}\n"
+            f"{fmt(s_week, 'За 7 дней')}\n"
+            f"{fmt(s_month, 'За 30 дней')}"
+        )
+        await message.answer(text, parse_mode="Markdown")
+
+    @dp.message(Command("find"))
+    async def cmd_find(message: types.Message):
+        if not is_admin(message.from_user.id):
+            await message.answer("⛔ Доступ запрещён.")
+            return
+        query = (message.text or "").partition(" ")[2].strip().lower()
+        if not query or len(query) < 2:
+            await message.answer(
+                "🔍 *Поиск клиента*\n\n"
+                "Использование: `/find <телефон, имя или ID брони>`\n"
+                "Например: `/find Иванов`  или  `/find 79991234567`",
+                parse_mode="Markdown"
+            )
+            return
+        # Нормализуем телефон (только цифры)
+        query_digits = "".join(c for c in query if c.isdigit())
+        bookings = load_db().get("bookings", [])
+        matches = []
+        for b in bookings:
+            hay_name = (b.get("name") or "").lower()
+            hay_phone = "".join(c for c in (b.get("phone") or "") if c.isdigit())
+            hay_id = (b.get("booking_id") or "").lower()
+            if query in hay_name or query in hay_id:
+                matches.append(b)
+            elif query_digits and len(query_digits) >= 4 and query_digits in hay_phone:
+                matches.append(b)
+        if not matches:
+            await message.answer(f"🔍 По запросу *{query}* ничего не найдено.", parse_mode="Markdown")
+            return
+        await _send_bookings_list(message, matches, f"🔍 *Результаты поиска:* «{query}»")
+
+    # /newbooking — ручное создание брони админом одной строкой
+    _NB_TARIFFS = {
+        # ключ → (id_тарифа в TARIFFS_BOT, цена за 1 место за 1 день)
+        "hour": ("1", 100, "1 час"),
+        "1h":   ("1", 100, "1 час"),
+        "1ч":   ("1", 100, "1 час"),
+        "3h":   ("2", 200, "3 часа"),
+        "3ч":   ("2", 200, "3 часа"),
+        "day":  ("3", 300, "Весь день"),
+        "день": ("3", 300, "Весь день"),
+        "night":("4", 100, "После 19:00"),
+        "вечер":("4", 100, "После 19:00"),
+        "24h":  ("5", 600, "Сутки"),
+        "сутки":("5", 600, "Сутки"),
+        "big":  ("5", 800, "Велочемодан/крупногабарит"),
+        "вело": ("5", 800, "Велочемодан/крупногабарит"),
+    }
+
+    import re as _re
+
+    @dp.message(Command("newbooking"))
+    async def cmd_newbooking(message: types.Message):
+        if not is_admin(message.from_user.id):
+            await message.answer("⛔ Доступ запрещён.")
+            return
+
+        args = (message.text or "").partition(" ")[2].strip()
+        usage = (
+            "📝 *Создание брони вручную*\n\n"
+            "Формат: `/newbooking <тариф> <мест> <имя> <телефон>`\n\n"
+            "*Тарифы:*\n"
+            "  • `hour` — 1 час (100 ₽)\n"
+            "  • `3h` — 3 часа (200 ₽)\n"
+            "  • `day` — весь день (300 ₽)\n"
+            "  • `night` — после 19:00 (100 ₽/ч)\n"
+            "  • `24h` — сутки (600 ₽)\n"
+            "  • `big` — велочемодан (800 ₽)\n\n"
+            "*Пример:*\n"
+            "`/newbooking day 3 Иванов Иван +79991234567`\n\n"
+            "_Дата — сегодня, время — текущее. Цена считается автоматически._"
+        )
+        if not args:
+            await message.answer(usage, parse_mode="Markdown")
+            return
+
+        tokens = args.split()
+        if len(tokens) < 4:
+            await message.answer("⚠️ Слишком мало аргументов.\n\n" + usage, parse_mode="Markdown")
+            return
+
+        # 1) Тариф
+        tariff_key = tokens[0].lower()
+        if tariff_key not in _NB_TARIFFS:
+            await message.answer(f"⚠️ Неизвестный тариф: `{tokens[0]}`\n\n" + usage, parse_mode="Markdown")
+            return
+        tariff_id, price_per_item, tariff_label = _NB_TARIFFS[tariff_key]
+
+        # 2) Количество мест
+        try:
+            items = int(tokens[1])
+        except ValueError:
+            await message.answer(f"⚠️ Количество мест должно быть числом, не `{tokens[1]}`.", parse_mode="Markdown")
+            return
+        if items < 1 or items > 10:
+            await message.answer("⚠️ Мест должно быть от 1 до 10.")
+            return
+
+        # 3) Телефон — последний токен с >=10 цифрами
+        rest = tokens[2:]
+        phone = None
+        phone_idx = None
+        for idx in range(len(rest) - 1, -1, -1):
+            digits = "".join(c for c in rest[idx] if c.isdigit())
+            if len(digits) >= 10:
+                phone = rest[idx]
+                phone_idx = idx
+                break
+        if phone is None:
+            await message.answer(
+                "⚠️ Не нашла номер телефона. "
+                "Укажите его последним аргументом (минимум 10 цифр, например `+79991234567`).",
+            )
+            return
+
+        # 4) Имя — всё что между мест и телефоном
+        name_tokens = rest[:phone_idx]
+        name = " ".join(name_tokens).strip()
+        if not name:
+            await message.answer("⚠️ Не нашла имя клиента.")
+            return
+
+        # Проверка свободных мест
+        free = TOTAL_PLACES - count_active_today()
+        if items > free:
+            await message.answer(f"⚠️ Недостаточно мест. Свободно: {free}.")
+            return
+
+        # Собираем бронь
+        now = datetime.datetime.now()
+        booking_id = f"L{now.strftime('%y%m%d%H%M%S')}{message.from_user.id % 100:02d}"
+        total = price_per_item * items
+        place_num = (TOTAL_PLACES - free) + 1
+
+        booking = {
+            "booking_id": booking_id,
+            "place_num": place_num,
+            "tariff": f"{tariff_label} — {price_per_item} ₽/место",
+            "date": now.date().isoformat(),
+            "time": now.strftime("%H:%M"),
+            "items": items,
+            "name": name,
+            "phone": phone,
+            "total": total,
+            "telegram_user_id": None,
+            "telegram_username": None,
+            "created_at": now.isoformat(),
+            "created_by_admin": message.from_user.id,
+            "status": "active",
+        }
+
+        db = load_db()
+        db.setdefault("bookings", []).append(booking)
+        save_db(db)
+
+        await message.answer(
+            f"✅ *Бронь создана*\n"
+            f"━━━━━━━━━━━━━━\n"
+            f"🆔 `{booking_id}`\n"
+            f"📦 Место №{place_num}\n"
+            f"💰 {tariff_label}\n"
+            f"🎒 {items} шт\n"
+            f"👤 {name}\n"
+            f"📞 {phone}\n"
+            f"💵 *{total:,} ₽*",
+            parse_mode="Markdown"
+        )
+        # Уведомить остальных админов о ручном создании
+        await broadcast_to_admins(
+            f"📝 *Бронь создана вручную*\n"
+            f"━━━━━━━━━━━━━━\n"
+            f"🆔 `{booking_id}`\n"
+            f"👤 {name} · 📞 {phone}\n"
+            f"💰 {tariff_label} · 🎒 {items} шт · 💵 {total:,} ₽\n"
+            f"_Админ: {message.from_user.full_name or message.from_user.id}_"
+        )
 
     @dp.message(Command("help"))
     async def cmd_help(message: types.Message):
@@ -1346,25 +1213,18 @@ if BOT_TOKEN:
         )
         await callback.answer("Бронь отменена")
 
-        # Уведомить админа
-        if ADMIN_CHAT_ID:
-            try:
-                user_info = f" (@{target.get('telegram_username')})" if target.get("telegram_username") else ""
-                await bot.send_message(
-                    chat_id=int(ADMIN_CHAT_ID),
-                    text=(
-                        f"❌ *Бронь отменена пользователем*\n"
-                        f"━━━━━━━━━━━━━━\n"
-                        f"🆔 `{booking_id}`\n"
-                        f"📦 Место №{target.get('place_num','—')}\n"
-                        f"👤 {target['name']}{user_info}\n"
-                        f"📞 {target['phone']}\n"
-                        f"💵 Сумма была: {target['total']:,} ₽"
-                    ),
-                    parse_mode="Markdown"
-                )
-            except Exception as e:
-                print(f"[admin cancel notify] {e}")
+        # Уведомить всех админов
+        if ADMIN_IDS:
+            user_info = f" (@{target.get('telegram_username')})" if target.get("telegram_username") else ""
+            await broadcast_to_admins(
+                f"❌ *Бронь отменена пользователем*\n"
+                f"━━━━━━━━━━━━━━\n"
+                f"🆔 `{booking_id}`\n"
+                f"📦 Место №{target.get('place_num','—')}\n"
+                f"👤 {target['name']}{user_info}\n"
+                f"📞 {target['phone']}\n"
+                f"💵 Сумма была: {target['total']:,} ₽"
+            )
 
     @dp.callback_query(F.data == "cancel_no")
     async def cb_cancel_no(callback: types.CallbackQuery):
@@ -1772,8 +1632,6 @@ if BOT_TOKEN:
 
     @dp.message(BookFSM.name)
     async def bt_name_text(message: types.Message, state: FSMContext):
-        if await check_and_autoban(message, state):
-            return
         name = (message.text or "").strip()
         if len(name) < 2:
             await message.answer("Имя слишком короткое, введите ещё раз:")
@@ -2073,34 +1931,52 @@ async def send_user_confirmation(booking: dict):
         print(f"[user_confirm] {e}")
 
 
+async def broadcast_to_admins(text: str, reply_markup=None, parse_mode: str = "Markdown",
+                              only_main: bool = False):
+    """Шлёт сообщение всем админам (или только главному).
+    Возвращает количество успешно доставленных сообщений."""
+    if not bot:
+        return 0
+    targets = {MAIN_ADMIN_ID} if only_main else set(ADMIN_IDS)
+    targets.discard(0)
+    sent = 0
+    for aid in targets:
+        try:
+            await bot.send_message(chat_id=aid, text=text,
+                                   parse_mode=parse_mode, reply_markup=reply_markup)
+            sent += 1
+        except Exception as e:
+            print(f"[broadcast_admins {aid}] {e}")
+    return sent
+
+
 async def notify_admin(booking: dict):
-    if not bot or not ADMIN_CHAT_ID:
+    """Уведомление о новой брони — всем админам."""
+    if not bot or not ADMIN_IDS:
         return
-    try:
-        user_info = f" (@{booking['telegram_username']})" if booking.get("telegram_username") else ""
-        msg = (
-            f"🔔 *Новое бронирование!*\n"
-            f"━━━━━━━━━━━━━━\n"
-            f"🆔 `{booking['booking_id']}`\n"
-            f"📦 Место: *№{booking.get('place_num','—')}*\n"
-            f"💰 Тариф: {booking['tariff']}\n"
-            f"📅 Дата: {fmt_date_ru(booking['date'])}\n"
-            f"⏰ Время: {booking.get('time') or '—'}\n"
-            f"🎒 Вещей: {booking['items']} шт\n"
-            f"👤 Имя: {booking['name']}{user_info}\n"
-            f"📞 Тел.: {booking['phone']}\n"
-            f"💵 Итого: *{booking['total']:,} ₽*"
-        )
-        await bot.send_message(chat_id=int(ADMIN_CHAT_ID), text=msg, parse_mode="Markdown")
-    except Exception as e:
-        print(f"[admin] {e}")
+    user_info = f" (@{booking['telegram_username']})" if booking.get("telegram_username") else ""
+    msg = (
+        f"🔔 *Новое бронирование!*\n"
+        f"━━━━━━━━━━━━━━\n"
+        f"🆔 `{booking['booking_id']}`\n"
+        f"📦 Место: *№{booking.get('place_num','—')}*\n"
+        f"💰 Тариф: {booking['tariff']}\n"
+        f"📅 Дата: {fmt_date_ru(booking['date'])}\n"
+        f"⏰ Время: {booking.get('time') or '—'}\n"
+        f"🎒 Вещей: {booking['items']} шт\n"
+        f"👤 Имя: {booking['name']}{user_info}\n"
+        f"📞 Тел.: {booking['phone']}\n"
+        f"💵 Итого: *{booking['total']:,} ₽*"
+    )
+    await broadcast_to_admins(msg)
 
 
 async def set_bot_commands():
-    """Регистрируем нативное меню команд (кнопка '/' слева от поля ввода)."""
+    """Регистрируем нативное меню команд (кнопка '/' слева от поля ввода).
+    Обычные пользователи видят базовый набор, админы — расширенный."""
     if not bot:
         return
-    commands = [
+    base_commands = [
         BotCommand(command="start", description="🏠 Главное меню"),
         BotCommand(command="book", description="📅 Забронировать место"),
         BotCommand(command="price", description="💰 Тарифы и цены"),
@@ -2111,9 +1987,25 @@ async def set_bot_commands():
         BotCommand(command="contact", description="📞 Связаться с администрацией"),
         BotCommand(command="help", description="ℹ️ Помощь и список команд"),
     ]
+    admin_commands = base_commands + [
+        BotCommand(command="admin",      description="🔧 Админ-панель и сводка"),
+        BotCommand(command="today",      description="📅 Брони на сегодня"),
+        BotCommand(command="tomorrow",   description="📅 Брони на завтра"),
+        BotCommand(command="week",       description="📅 Брони на неделю"),
+        BotCommand(command="stats",      description="📊 Статистика и выручка"),
+        BotCommand(command="find",       description="🔍 Найти клиента"),
+        BotCommand(command="newbooking", description="📝 Создать бронь вручную"),
+    ]
     try:
-        await bot.set_my_commands(commands)
-        print("📋 Меню команд зарегистрировано")
+        # Базовое меню — всем
+        await bot.set_my_commands(base_commands)
+        # Расширенное меню — каждому админу персонально
+        for aid in ADMIN_IDS:
+            try:
+                await bot.set_my_commands(admin_commands, scope=BotCommandScopeChat(chat_id=aid))
+            except Exception as e:
+                print(f"[set_commands admin {aid}] {e}")
+        print(f"📋 Меню команд зарегистрировано (базовое + расширенное для {len(ADMIN_IDS)} админов)")
     except Exception as e:
         print(f"[set_commands] {e}")
 
@@ -2179,6 +2071,122 @@ async def auto_review_loop():
             print(f"[auto-review-loop] {e}")
 
 
+# ─────────── ФОНОВАЯ ЗАДАЧА: уведомления админов ───────────
+
+# Через сколько минут после окончания тарифа считать клиента не пришедшим
+NOSHOW_AFTER_MINUTES = 30
+# Час, в который отправлять ежедневную сводку (по серверному времени)
+DAILY_SUMMARY_HOUR = 20
+DAILY_SUMMARY_MINUTE = 0
+
+
+async def admin_notify_loop():
+    """
+    Раз в минуту:
+    - Проверяет активные брони и шлёт админам пинг по тем, где клиент не пришёл
+      (время окончания + NOSHOW_AFTER_MINUTES уже наступило, ставит флаг noshow_notified).
+    - В DAILY_SUMMARY_HOUR:DAILY_SUMMARY_MINUTE — отправляет ежедневную сводку (1 раз в сутки).
+    """
+    if not bot:
+        return
+    print(f"🔁 Admin-notify loop запущен (сводка в {DAILY_SUMMARY_HOUR:02d}:{DAILY_SUMMARY_MINUTE:02d})")
+    while True:
+        try:
+            await asyncio.sleep(60)
+            if not ADMIN_IDS:
+                continue
+            db = load_db()
+            now = datetime.datetime.now()
+            changed = False
+
+            # 1) No-show пинги
+            for b in db.get("bookings", []):
+                if b.get("status") != "active":
+                    continue
+                if b.get("noshow_notified"):
+                    continue
+                end = calc_booking_end(b)
+                if not end:
+                    continue
+                if now < end + datetime.timedelta(minutes=NOSHOW_AFTER_MINUTES):
+                    continue
+                # Пинг админам
+                try:
+                    user_tag = f" (@{b.get('telegram_username')})" if b.get("telegram_username") else ""
+                    minutes_late = int((now - end).total_seconds() // 60)
+                    await broadcast_to_admins(
+                        f"⏰ *Клиент не пришёл?*\n"
+                        f"━━━━━━━━━━━━━━\n"
+                        f"🆔 `{b['booking_id']}`\n"
+                        f"📦 Место №{b.get('place_num','—')} · {b.get('items',1)} шт\n"
+                        f"📅 {fmt_date_ru(b.get('date','—'))} {b.get('time') or ''}\n"
+                        f"👤 {b.get('name','—')}{user_tag}\n"
+                        f"📞 {b.get('phone','—')}\n"
+                        f"⌛ Окончание тарифа было *{minutes_late} мин назад*\n\n"
+                        f"_Проверьте в /admin: бронь всё ещё активна._"
+                    )
+                    b["noshow_notified"] = True
+                    b["noshow_notified_at"] = now.isoformat()
+                    changed = True
+                except Exception as e:
+                    print(f"[noshow notify] {e}")
+
+            # 2) Ежедневная сводка в 20:00
+            meta = db.setdefault("meta", {})
+            today_iso = now.date().isoformat()
+            already_sent = meta.get("last_daily_summary_date") == today_iso
+            in_window = (
+                now.hour == DAILY_SUMMARY_HOUR
+                and DAILY_SUMMARY_MINUTE <= now.minute <= DAILY_SUMMARY_MINUTE + 5
+            )
+            if in_window and not already_sent:
+                try:
+                    bookings = db.get("bookings", [])
+                    todays = [b for b in bookings if b.get("date") == today_iso]
+                    revenue = sum(
+                        b.get("total", 0) for b in todays
+                        if b.get("status") in ("active", "completed")
+                    )
+                    completed_n = sum(1 for b in todays if b.get("status") == "completed")
+                    active_n = sum(1 for b in todays if b.get("status") == "active")
+                    cancelled_n = sum(1 for b in todays if b.get("status") == "cancelled")
+                    noshow_n = sum(
+                        1 for b in todays
+                        if b.get("status") == "active" and b.get("noshow_notified")
+                    )
+                    items_total = sum(
+                        b.get("items", 0) for b in todays
+                        if b.get("status") in ("active", "completed")
+                    )
+                    avg_check = (revenue // len(todays)) if todays else 0
+
+                    summary = (
+                        f"📊 *Сводка за {fmt_date_ru(today_iso)}*\n"
+                        f"━━━━━━━━━━━━━━━━━━\n\n"
+                        f"💵 *Выручка:* {revenue:,} ₽\n"
+                        f"📋 *Броней всего:* {len(todays)}\n"
+                        f"  ✅ Выполнено: {completed_n}\n"
+                        f"  🟢 Ещё активны: {active_n}\n"
+                        f"  ❌ Отменено: {cancelled_n}\n"
+                        f"  ⏰ Не пришли: {noshow_n}\n\n"
+                        f"🎒 *Мест занято:* {items_total}\n"
+                        f"💰 *Средний чек:* {avg_check:,} ₽\n\n"
+                        f"_Хорошего вечера! 🌙_"
+                    )
+                    await broadcast_to_admins(summary)
+                    meta["last_daily_summary_date"] = today_iso
+                    changed = True
+                except Exception as e:
+                    print(f"[daily summary] {e}")
+
+            if changed:
+                save_db(db)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            print(f"[admin-notify-loop] {e}")
+
+
 async def send_review_and_promo(booking: dict):
     """Шлёт юзеру: спасибо + просьба об отзыве + промокод."""
     if not bot:
@@ -2224,6 +2232,10 @@ async def send_review_and_promo(booking: dict):
 
 # ─────────── API ───────────
 
+# Максимум на сколько дней вперёд можно бронировать
+BOOKING_HORIZON_DAYS = 30
+
+
 class BookingRequest(BaseModel):
     booking_id: str
     place_num: int
@@ -2237,16 +2249,46 @@ class BookingRequest(BaseModel):
     telegram_user_id: Optional[int] = None
     telegram_username: Optional[str] = None
 
+    @field_validator("date")
+    @classmethod
+    def _validate_date(cls, v: str) -> str:
+        # Формат YYYY-MM-DD
+        try:
+            d = datetime.date.fromisoformat(v)
+        except (ValueError, TypeError):
+            raise ValueError("Дата должна быть в формате YYYY-MM-DD")
+        today = datetime.date.today()
+        # Запрет броней задним числом
+        if d < today:
+            raise ValueError("Нельзя забронировать прошедшую дату")
+        # Запрет броней «в далёкое будущее»
+        if d > today + datetime.timedelta(days=BOOKING_HORIZON_DAYS):
+            raise ValueError(
+                f"Бронирование больше чем на {BOOKING_HORIZON_DAYS} дней вперёд недоступно"
+            )
+        return v
+
+    @field_validator("items")
+    @classmethod
+    def _validate_items(cls, v: int) -> int:
+        if v < 1:
+            raise ValueError("Минимум 1 место")
+        if v > 10:
+            raise ValueError("Максимум 10 мест в одной брони")
+        return v
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     bot_task = None
     review_task = None
+    admin_notify_task = None
     if bot and dp:
         bot_task = asyncio.create_task(start_bot())
         review_task = asyncio.create_task(auto_review_loop())
+        admin_notify_task = asyncio.create_task(admin_notify_loop())
     yield
-    for t in (bot_task, review_task):
+    for t in (bot_task, review_task, admin_notify_task):
         if t:
             t.cancel()
             try:
@@ -2269,6 +2311,40 @@ def root():
     if Path("index.html").exists():
         return FileResponse("index.html")
     return {"status": "ok"}
+
+
+SITE_URL = "https://lock39.ru"
+
+
+@app.get("/robots.txt", response_class=PlainTextResponse)
+def robots_txt():
+    """robots.txt — разрешаем индексировать всё, кроме API и приватных страниц."""
+    return (
+        "User-agent: *\n"
+        "Allow: /\n"
+        "Disallow: /api/\n"
+        "Disallow: /app\n"
+        "Disallow: /b/\n"
+        "\n"
+        f"Sitemap: {SITE_URL}/sitemap.xml\n"
+    )
+
+
+@app.get("/sitemap.xml")
+def sitemap_xml():
+    """sitemap.xml — карта сайта для поисковиков."""
+    today = datetime.date.today().isoformat()
+    xml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url>
+    <loc>{SITE_URL}/</loc>
+    <lastmod>{today}</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>1.0</priority>
+  </url>
+</urlset>
+"""
+    return Response(content=xml, media_type="application/xml")
 
 
 @app.get("/app")
@@ -2469,5 +2545,6 @@ if __name__ == "__main__":
     print(f"🚀 Старт на порту {PORT}")
     print(f"   BOT_TOKEN: {'✅ задан' if BOT_TOKEN else '❌ НЕ задан'}")
     print(f"   WEBAPP_URL: {WEBAPP_URL or '❌ НЕ задан'}")
-    print(f"   ADMIN_CHAT_ID: {ADMIN_CHAT_ID or '❌ НЕ задан'}")
+    print(f"   MAIN_ADMIN_ID: {MAIN_ADMIN_ID or '❌ НЕ задан'}")
+    print(f"   ADMIN_IDS: {sorted(ADMIN_IDS) if ADMIN_IDS else '❌ пуст'}")
     uvicorn.run(app, host="0.0.0.0", port=PORT)
