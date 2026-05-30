@@ -85,6 +85,35 @@ def is_main_admin(user_id) -> bool:
     except (TypeError, ValueError):
         return False
 
+
+# ─────────── ЧЁРНЫЙ СПИСОК ───────────
+
+def is_banned_user(user_id) -> bool:
+    """Проверка бана на уровне модуля (доступно и боту, и API)."""
+    try:
+        uid = int(user_id)
+    except (TypeError, ValueError):
+        return False
+    if uid == 0:
+        return False
+    try:
+        from json import JSONDecodeError as _J
+        # Используем минимальную проверку — не зависим от helper'ов бота
+        if not Path(DB_FILE).exists():
+            return False
+        import json as _json
+        with open(DB_FILE, "r", encoding="utf-8") as f:
+            data = _json.load(f)
+    except Exception:
+        return False
+    for b in data.get("banned_users", []):
+        try:
+            if int(b.get("user_id", 0)) == uid:
+                return True
+        except (TypeError, ValueError):
+            pass
+    return False
+
 # ─────────── ИНФО О КАМЕРЕ ХРАНЕНИЯ ───────────
 ADDRESS = "г. Зеленоградск, ул. Железнодорожная, 2Б корп. 1"
 ADDRESS_HINT = "Ориентир: железнодорожный вокзал Зеленоградска"
@@ -328,6 +357,10 @@ if BOT_TOKEN:
     class BroadcastFSM(StatesGroup):
         waiting_text = State()
         waiting_confirm = State()
+
+    # ──────── FSM: ответ клиенту через бота ────────
+    class ReplyFSM(StatesGroup):
+        waiting_text = State()
 
     def main_menu_kb() -> ReplyKeyboardMarkup:
         """Постоянное меню с кнопками внизу экрана."""
@@ -605,17 +638,22 @@ if BOT_TOKEN:
                 user = message.from_user
                 user_info = f"@{user.username}" if user.username else f"id {user.id}"
                 name = " ".join(filter(None, [user.first_name, user.last_name])) or "—"
-                # Кнопка "Ответить" — открывает чат
+                # Две кнопки: ответ через бота (от имени Lock·39) и личный чат
                 rkb = InlineKeyboardBuilder()
-                rkb.add(InlineKeyboardButton(
-                    text="💬 Ответить клиенту",
+                rkb.row(InlineKeyboardButton(
+                    text="💬 Ответить через бота",
+                    callback_data=f"reply:{user.id}"
+                ))
+                rkb.row(InlineKeyboardButton(
+                    text="👤 Открыть личный чат",
                     url=f"tg://user?id={user.id}"
                 ))
                 sent = await broadcast_to_admins(
                     (
                         f"📩 *Сообщение от клиента*\n"
                         f"━━━━━━━━━━━━━━\n"
-                        f"👤 {name} ({user_info})\n\n"
+                        f"👤 {name} ({user_info})\n"
+                        f"🆔 user_id: `{user.id}`\n\n"
                         f"💬 {text}"
                     ),
                     reply_markup=rkb.as_markup(),
@@ -765,6 +803,184 @@ if BOT_TOKEN:
             )
             await callback.message.answer(text, parse_mode="Markdown")
         await callback.answer()
+
+    # ──────── СИСТЕМА БАНОВ ────────
+
+    def _get_banned_list() -> list:
+        return load_db().get("banned_users", [])
+
+    def is_banned(user_id) -> bool:
+        try:
+            uid = int(user_id)
+        except (TypeError, ValueError):
+            return False
+        return any(int(b.get("user_id", 0)) == uid for b in _get_banned_list())
+
+    def _ban_reason(user_id) -> str:
+        try:
+            uid = int(user_id)
+        except (TypeError, ValueError):
+            return ""
+        for b in _get_banned_list():
+            if int(b.get("user_id", 0)) == uid:
+                return b.get("reason", "") or ""
+        return ""
+
+    def _resolve_user_id_from_arg(arg: str) -> Optional[int]:
+        """Принимает либо чистый user_id, либо booking_id и возвращает telegram_user_id."""
+        arg = arg.strip()
+        if not arg:
+            return None
+        # Чистое число — считаем user_id
+        if arg.isdigit():
+            return int(arg)
+        # Иначе ищем по booking_id в базе
+        for b in load_db().get("bookings", []):
+            if b.get("booking_id") == arg:
+                uid = b.get("telegram_user_id")
+                if uid:
+                    return int(uid)
+        return None
+
+    @dp.message(Command("ban"))
+    async def cmd_ban(message: types.Message):
+        if not is_admin(message.from_user.id):
+            await message.answer("⛔ Доступ запрещён.")
+            return
+        args = (message.text or "").partition(" ")[2].strip()
+        if not args:
+            await message.answer(
+                "🚫 *Бан клиента*\n\n"
+                "Формат: `/ban <user_id или ID брони> [причина]`\n\n"
+                "Примеры:\n"
+                "`/ban 123456789 спам`\n"
+                "`/ban LS-20260530-1234 не пришёл 3 раза`\n\n"
+                "Забаненный не сможет создавать новые брони (но старые работают и /cancel доступен).",
+                parse_mode="Markdown"
+            )
+            return
+        parts = args.split(maxsplit=1)
+        target_arg = parts[0]
+        reason = parts[1].strip() if len(parts) > 1 else ""
+
+        uid = _resolve_user_id_from_arg(target_arg)
+        if not uid:
+            await message.answer(
+                f"⚠️ Не нашла telegram-аккаунт по `{target_arg}`. "
+                f"Если указали booking_id — у этой брони, возможно, нет привязки к Telegram-юзеру.",
+                parse_mode="Markdown"
+            )
+            return
+
+        # Нельзя забанить админа
+        if is_admin(uid):
+            await message.answer("⚠️ Нельзя забанить админа.")
+            return
+
+        if is_banned(uid):
+            await message.answer(
+                f"ℹ️ Юзер `{uid}` уже в бане. Причина: _{_ban_reason(uid) or '—'}_",
+                parse_mode="Markdown"
+            )
+            return
+
+        db = load_db()
+        db.setdefault("banned_users", []).append({
+            "user_id": uid,
+            "reason": reason,
+            "banned_by": message.from_user.id,
+            "banned_by_name": message.from_user.full_name,
+            "banned_at": datetime.datetime.now().isoformat(),
+        })
+        save_db(db)
+
+        # Найти последнюю бронь юзера, чтобы показать админу контекст
+        last_booking = None
+        for b in reversed(db.get("bookings", [])):
+            if b.get("telegram_user_id") == uid:
+                last_booking = b
+                break
+
+        ctx = ""
+        if last_booking:
+            ctx = (
+                f"\n\n_Последняя бронь:_\n"
+                f"`{last_booking['booking_id']}` — {last_booking.get('name','—')} · "
+                f"{last_booking.get('phone','—')}"
+            )
+
+        await message.answer(
+            f"🚫 *Забанен:* `{uid}`\n"
+            f"Причина: _{reason or '—'}_{ctx}",
+            parse_mode="Markdown"
+        )
+        # Оповестить остальных админов
+        await broadcast_to_admins(
+            f"🚫 *Новый бан*\n"
+            f"━━━━━━━━━━━━━━\n"
+            f"User ID: `{uid}`\n"
+            f"Причина: {reason or '—'}\n"
+            f"Админ: {message.from_user.full_name or message.from_user.id}"
+        )
+
+    @dp.message(Command("unban"))
+    async def cmd_unban(message: types.Message):
+        if not is_admin(message.from_user.id):
+            await message.answer("⛔ Доступ запрещён.")
+            return
+        arg = (message.text or "").partition(" ")[2].strip()
+        if not arg:
+            await message.answer(
+                "✅ *Разбан клиента*\n\nФормат: `/unban <user_id>`",
+                parse_mode="Markdown"
+            )
+            return
+        uid = _resolve_user_id_from_arg(arg)
+        if not uid:
+            await message.answer(f"⚠️ Не нашла юзера по `{arg}`.", parse_mode="Markdown")
+            return
+        if not is_banned(uid):
+            await message.answer(f"ℹ️ Юзер `{uid}` не в бане.", parse_mode="Markdown")
+            return
+
+        db = load_db()
+        db["banned_users"] = [b for b in db.get("banned_users", []) if int(b.get("user_id", 0)) != uid]
+        save_db(db)
+
+        await message.answer(f"✅ Разбанен: `{uid}`", parse_mode="Markdown")
+        await broadcast_to_admins(
+            f"✅ *Разбан*\n"
+            f"User ID: `{uid}`\n"
+            f"Админ: {message.from_user.full_name or message.from_user.id}"
+        )
+
+    @dp.message(Command("banlist"))
+    async def cmd_banlist(message: types.Message):
+        if not is_admin(message.from_user.id):
+            await message.answer("⛔ Доступ запрещён.")
+            return
+        banned = _get_banned_list()
+        if not banned:
+            await message.answer("🟢 Чёрный список пуст.")
+            return
+        # Сортируем по дате бана, новые сверху
+        banned = sorted(banned, key=lambda b: b.get("banned_at", ""), reverse=True)
+        lines = [f"🚫 *Чёрный список* ({len(banned)})\n━━━━━━━━━━━━━━"]
+        for b in banned[:50]:
+            try:
+                dt = datetime.datetime.fromisoformat(b.get("banned_at", ""))
+                dt_str = dt.strftime("%d.%m.%Y")
+            except Exception:
+                dt_str = "—"
+            reason = b.get("reason") or "—"
+            by = b.get("banned_by_name") or b.get("banned_by") or "—"
+            lines.append(
+                f"\n`{b.get('user_id')}` — _{reason}_\n"
+                f"  забанил {by} · {dt_str}"
+            )
+        if len(banned) > 50:
+            lines.append(f"\n_…и ещё {len(banned) - 50} записей._")
+        await message.answer("\n".join(lines), parse_mode="Markdown")
 
     # ──────── РАСШИРЕННАЯ CRM ДЛЯ АДМИНОВ ────────
 
@@ -1463,6 +1679,126 @@ if BOT_TOKEN:
             parse_mode="Markdown"
         )
 
+    # ──────── ОТВЕТ КЛИЕНТУ ЧЕРЕЗ БОТА ────────
+
+    async def _send_reply_to_client(target_user_id: int, text: str,
+                                    admin_message: types.Message) -> bool:
+        """Шлёт клиенту ответ от имени бота. Возвращает True/False."""
+        try:
+            await bot.send_message(
+                chat_id=target_user_id,
+                text=(
+                    f"💬 *Ответ от Lock·39*\n"
+                    f"━━━━━━━━━━━━━━\n\n"
+                    f"{text}\n\n"
+                    f"_Чтобы написать снова — используйте /contact_"
+                ),
+                parse_mode="Markdown"
+            )
+            return True
+        except Exception as e:
+            err_str = str(e).lower()
+            if "blocked" in err_str or "forbidden" in err_str or "deactivated" in err_str:
+                await admin_message.answer(
+                    f"⚠️ Клиент `{target_user_id}` заблокировал бота — ответ не доставлен.",
+                    parse_mode="Markdown"
+                )
+            elif "chat not found" in err_str:
+                await admin_message.answer(
+                    f"⚠️ Клиент `{target_user_id}` не найден (возможно, никогда не писал боту).",
+                    parse_mode="Markdown"
+                )
+            else:
+                await admin_message.answer(f"⚠️ Ошибка отправки: {e}")
+            return False
+
+    @dp.callback_query(F.data.startswith("reply:"))
+    async def reply_callback(callback: types.CallbackQuery, state: FSMContext):
+        """Запуск FSM ответа клиенту по кнопке."""
+        if not is_admin(callback.from_user.id):
+            await callback.answer("Доступ запрещён", show_alert=True)
+            return
+        try:
+            target_uid = int(callback.data.split(":", 1)[1])
+        except ValueError:
+            await callback.answer("Неверный user_id", show_alert=True)
+            return
+        await state.update_data(reply_target=target_uid)
+        await state.set_state(ReplyFSM.waiting_text)
+        await callback.answer()
+        cancel_kb = InlineKeyboardBuilder()
+        cancel_kb.add(InlineKeyboardButton(text="❌ Отмена", callback_data="reply:cancel"))
+        await callback.message.answer(
+            f"💬 *Ответ клиенту* `{target_uid}`\n\n"
+            f"Напишите текст ответа — клиент получит его от имени бота Lock·39.\n\n"
+            f"_Или нажмите «Отмена»._",
+            parse_mode="Markdown",
+            reply_markup=cancel_kb.as_markup()
+        )
+
+    @dp.callback_query(F.data == "reply:cancel", ReplyFSM.waiting_text)
+    async def reply_cancel(callback: types.CallbackQuery, state: FSMContext):
+        await state.clear()
+        await callback.message.edit_text("❌ Ответ отменён.")
+        await callback.answer()
+
+    @dp.message(ReplyFSM.waiting_text)
+    async def reply_got_text(message: types.Message, state: FSMContext):
+        if not is_admin(message.from_user.id):
+            return
+        text = (message.text or "").strip()
+        if not text:
+            await message.answer("Пустое сообщение. Напишите текст или отмените.")
+            return
+        data = await state.get_data()
+        target_uid = data.get("reply_target")
+        await state.clear()
+        if not target_uid:
+            await message.answer("⚠️ Потерял адресата. Попробуйте ещё раз через кнопку.")
+            return
+        ok = await _send_reply_to_client(int(target_uid), text, message)
+        if ok:
+            await message.answer(
+                f"✅ Ответ отправлен клиенту `{target_uid}`.",
+                parse_mode="Markdown"
+            )
+
+    @dp.message(Command("reply"))
+    async def cmd_reply(message: types.Message):
+        """Одношаговый ответ: /reply <user_id> <текст>"""
+        if not is_admin(message.from_user.id):
+            await message.answer("⛔ Доступ запрещён.")
+            return
+        args = (message.text or "").partition(" ")[2].strip()
+        if not args:
+            await message.answer(
+                "💬 *Ответ клиенту*\n\n"
+                "Формат: `/reply <user_id> <текст>`\n\n"
+                "Пример: `/reply 123456789 Здравствуйте! Ждём вас сегодня до 22:00.`\n\n"
+                "_Удобнее — нажать кнопку «💬 Ответить через бота» под сообщением клиента._",
+                parse_mode="Markdown"
+            )
+            return
+        parts = args.split(maxsplit=1)
+        if len(parts) < 2:
+            await message.answer("⚠️ Нужно указать и user_id, и текст.")
+            return
+        try:
+            target_uid = int(parts[0])
+        except ValueError:
+            await message.answer(f"⚠️ user_id должен быть числом, а не `{parts[0]}`.", parse_mode="Markdown")
+            return
+        text = parts[1].strip()
+        if not text:
+            await message.answer("⚠️ Пустой текст.")
+            return
+        ok = await _send_reply_to_client(target_uid, text, message)
+        if ok:
+            await message.answer(
+                f"✅ Ответ отправлен клиенту `{target_uid}`.",
+                parse_mode="Markdown"
+            )
+
     # ──────── Отслеживание отзывов ────────
 
     @dp.callback_query(F.data.startswith("rev:done:"))
@@ -1828,6 +2164,19 @@ if BOT_TOKEN:
     @dp.message(Command("book"))
     async def cmd_book(message: types.Message, state: FSMContext):
         """Начало бронирования через чат."""
+        # Проверка бана
+        if is_banned(message.from_user.id):
+            reason = _ban_reason(message.from_user.id)
+            await message.answer(
+                "🚫 *Вы заблокированы в сервисе Lock·39.*\n\n"
+                + (f"_Причина: {reason}_\n\n" if reason else "")
+                + "Если считаете блокировку ошибкой — напишите в "
+                  "[Telegram-менеджер](https://t.me/prostomari01).",
+                parse_mode="Markdown",
+                disable_web_page_preview=True
+            )
+            return
+
         existing = get_active_booking_for_user(message.from_user.id)
         if existing:
             await message.answer(
@@ -2500,6 +2849,10 @@ async def set_bot_commands():
         BotCommand(command="reviews",    description="⭐ Воронка отзывов"),
         BotCommand(command="find",       description="🔍 Найти клиента"),
         BotCommand(command="newbooking", description="📝 Создать бронь вручную"),
+        BotCommand(command="reply",      description="💬 Ответить клиенту"),
+        BotCommand(command="ban",        description="🚫 Забанить клиента"),
+        BotCommand(command="unban",      description="✅ Разбанить клиента"),
+        BotCommand(command="banlist",    description="📋 Чёрный список"),
     ]
     # Главному админу — ещё и команда массовой рассылки
     main_admin_commands = admin_commands + [
@@ -2894,6 +3247,14 @@ async def create_booking(req: BookingRequest):
         raise HTTPException(400, "Максимум 10 мест в одной брони")
     if req.items < 1:
         raise HTTPException(400, "Минимум 1 место")
+
+    # Проверка чёрного списка
+    if req.telegram_user_id and is_banned_user(req.telegram_user_id):
+        raise HTTPException(
+            403,
+            "Этот аккаунт заблокирован администрацией Lock·39. "
+            "Если считаете блокировку ошибкой — напишите в Telegram @prostomari01."
+        )
 
     db = load_db()
     # Защита от дубля по booking_id
