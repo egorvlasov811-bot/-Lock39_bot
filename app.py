@@ -324,6 +324,11 @@ if BOT_TOKEN:
     class ContactFSM(StatesGroup):
         message = State()
 
+    # ──────── FSM: массовая рассылка (только главный админ) ────────
+    class BroadcastFSM(StatesGroup):
+        waiting_text = State()
+        waiting_confirm = State()
+
     def main_menu_kb() -> ReplyKeyboardMarkup:
         """Постоянное меню с кнопками внизу экрана."""
         kb = ReplyKeyboardBuilder()
@@ -849,10 +854,89 @@ if BOT_TOKEN:
                 "items": sum(b.get("items", 0) for b in bs if b.get("status") in ("active", "completed")),
             }
 
+        # ─── Режим: /stats YYYY-MM — статистика за конкретный месяц ───
+        arg = (message.text or "").partition(" ")[2].strip()
+        if arg:
+            try:
+                # Поддерживаем форматы: 2026-04, 04.2026, 2026/04
+                arg_norm = arg.replace(".", "-").replace("/", "-")
+                parts = arg_norm.split("-")
+                if len(parts) == 2 and len(parts[0]) == 4:
+                    year, month = int(parts[0]), int(parts[1])
+                elif len(parts) == 2 and len(parts[1]) == 4:
+                    month, year = int(parts[0]), int(parts[1])
+                else:
+                    raise ValueError("bad format")
+                if not (1 <= month <= 12):
+                    raise ValueError("bad month")
+                month_start = datetime.date(year, month, 1)
+                # Конец месяца — первый день следующего минус секунда (для сравнения по строке)
+                if month == 12:
+                    next_start = datetime.date(year + 1, 1, 1)
+                else:
+                    next_start = datetime.date(year, month + 1, 1)
+            except (ValueError, IndexError):
+                await message.answer(
+                    "⚠️ Не понимаю формат месяца.\n\n"
+                    "Используйте: `/stats 2026-04` или `/stats 04.2026`",
+                    parse_mode="Markdown"
+                )
+                return
+
+            s_month_target = stats_for(
+                lambda b: b.get("date") and month_start.isoformat() <= b["date"] < next_start.isoformat()
+            )
+            # Дни этого месяца (для среднего по дню)
+            month_days = (next_start - month_start).days
+            today_in_month = min(today, next_start - datetime.timedelta(days=1))
+            days_passed = (today_in_month - month_start).days + 1 if today >= month_start else 0
+            days_for_avg = days_passed if (year == today.year and month == today.month) else month_days
+            avg_per_day = (s_month_target["revenue"] // days_for_avg) if days_for_avg > 0 else 0
+
+            ru_months = ["январь","февраль","март","апрель","май","июнь",
+                         "июль","август","сентябрь","октябрь","ноябрь","декабрь"]
+            month_name = ru_months[month - 1]
+
+            text = (
+                f"📊 *Статистика за {month_name} {year}*\n"
+                f"━━━━━━━━━━━━━━━━━━\n\n"
+                f"💵 Выручка: *{s_month_target['revenue']:,} ₽*\n"
+                f"📋 Броней: *{s_month_target['total']}* "
+                f"(🟢{s_month_target['active']} ✅{s_month_target['completed']} ❌{s_month_target['cancelled']})\n"
+                f"🎒 Мест занято: *{s_month_target['items']}*\n"
+                f"💰 Средний чек: *{(s_month_target['revenue'] // s_month_target['total']) if s_month_target['total'] else 0:,} ₽*\n"
+                f"📅 Среднее в день: *{avg_per_day:,} ₽*"
+                + (f" (за {days_for_avg} дн)" if days_for_avg > 0 else "")
+            )
+            await message.answer(text, parse_mode="Markdown")
+            return
+
         s_today = stats_for(lambda b: b.get("date") == today.isoformat())
         s_week = stats_for(lambda b: b.get("date") and b["date"] >= week_ago)
         s_month = stats_for(lambda b: b.get("date") and b["date"] >= month_ago)
+        s_all = stats_for(lambda b: True)
         occupied = count_active_today()
+
+        # ─── Сравнение с прошлым месяцем (текущий календарный vs прошлый) ───
+        cur_month_start = today.replace(day=1)
+        if cur_month_start.month == 1:
+            prev_month_start = cur_month_start.replace(year=cur_month_start.year - 1, month=12)
+        else:
+            prev_month_start = cur_month_start.replace(month=cur_month_start.month - 1)
+
+        s_cur_month = stats_for(
+            lambda b: b.get("date") and b["date"] >= cur_month_start.isoformat()
+        )
+        s_prev_month = stats_for(
+            lambda b: b.get("date") and prev_month_start.isoformat() <= b["date"] < cur_month_start.isoformat()
+        )
+
+        def trend_arrow(cur: int, prev: int) -> str:
+            if prev == 0:
+                return "🆕" if cur > 0 else ""
+            diff = ((cur - prev) / prev) * 100
+            sign = "↑" if diff >= 0 else "↓"
+            return f"{sign}{abs(diff):.0f}%"
 
         def fmt(s, label):
             return (
@@ -862,15 +946,186 @@ if BOT_TOKEN:
                 f"  🎒 Мест занято: {s['items']}\n"
             )
 
+        # ─── Расширенная статистика «за всё время» ───
+        # Учитываем только успешные брони (active/completed)
+        paid = [b for b in bookings if b.get("status") in ("active", "completed")]
+        # Постоянные клиенты (>1 брони с одного телефона)
+        from collections import Counter as _C
+        phones = _C(
+            "".join(c for c in (b.get("phone") or "") if c.isdigit())
+            for b in paid if b.get("phone")
+        )
+        unique_clients = len(phones)
+        repeat_clients = sum(1 for _, n in phones.items() if n >= 2)
+        # Самый частый тариф
+        tariffs_cnt = _C((b.get("tariff") or "—").split("—")[0].strip() for b in paid)
+        top_tariff = tariffs_cnt.most_common(1)[0] if tariffs_cnt else ("—", 0)
+        # Средний чек
+        avg_check = (s_all["revenue"] // s_all["total"]) if s_all["total"] else 0
+        # Лучший день (макс выручка)
+        from collections import defaultdict as _dd
+        revenue_by_day = _dd(int)
+        for b in paid:
+            d = b.get("date")
+            if d:
+                revenue_by_day[d] += b.get("total", 0)
+        if revenue_by_day:
+            best_day, best_revenue = max(revenue_by_day.items(), key=lambda kv: kv[1])
+            best_day_str = f"{fmt_date_ru(best_day)} — *{best_revenue:,} ₽*"
+        else:
+            best_day_str = "—"
+        # Дней работы (по первой брони)
+        if paid:
+            first_date = min((b.get("date") for b in paid if b.get("date")), default=None)
+            if first_date:
+                try:
+                    d0 = datetime.date.fromisoformat(first_date)
+                    days_active = (today - d0).days + 1
+                except ValueError:
+                    days_active = None
+            else:
+                days_active = None
+        else:
+            days_active = None
+        avg_per_day = (s_all["revenue"] // days_active) if days_active and days_active > 0 else 0
+
+        ru_months_short = ["янв","фев","мар","апр","май","июн","июл","авг","сен","окт","ноя","дек"]
+        cur_label = ru_months_short[cur_month_start.month - 1]
+        prev_label = ru_months_short[prev_month_start.month - 1]
+        rev_trend = trend_arrow(s_cur_month["revenue"], s_prev_month["revenue"])
+        cnt_trend = trend_arrow(s_cur_month["total"], s_prev_month["total"])
+
         text = (
             f"📊 *Статистика*\n"
             f"━━━━━━━━━━━━━━━━━━\n\n"
             f"📦 *Сейчас занято:* {occupied} из {TOTAL_PLACES} мест\n\n"
             f"{fmt(s_today, 'Сегодня')}\n"
             f"{fmt(s_week, 'За 7 дней')}\n"
-            f"{fmt(s_month, 'За 30 дней')}"
+            f"{fmt(s_month, 'За 30 дней')}\n"
+            f"{fmt(s_all, 'За всё время')}\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"📅 *{cur_label.capitalize()} vs {prev_label}:*\n"
+            f"  💵 Выручка: *{s_cur_month['revenue']:,} ₽* "
+            f"(было {s_prev_month['revenue']:,} ₽) {rev_trend}\n"
+            f"  📋 Броней: *{s_cur_month['total']}* "
+            f"(было {s_prev_month['total']}) {cnt_trend}\n\n"
+            f"📈 *Подробно за всё время:*\n"
+            f"  💰 Средний чек: *{avg_check:,} ₽*\n"
+            f"  📅 Выручка в день: *{avg_per_day:,} ₽*"
+            + (f" (за {days_active} дн)" if days_active else "") + "\n"
+            f"  👥 Уникальных клиентов: *{unique_clients}*\n"
+            f"  🔁 Вернулись 2+ раза: *{repeat_clients}*\n"
+            f"  🏆 Лучший день: {best_day_str}\n"
+            f"  ⭐ Топ-тариф: *{top_tariff[0]}* ({top_tariff[1]} броней)\n\n"
+            f"_Подсказка: `/stats 2026-04` — стата за конкретный месяц_"
         )
         await message.answer(text, parse_mode="Markdown")
+
+    @dp.message(Command("chart"))
+    async def cmd_chart(message: types.Message):
+        """Рисует график выручки по дням за последние N дней (по умолчанию 30)."""
+        if not is_admin(message.from_user.id):
+            await message.answer("⛔ Доступ запрещён.")
+            return
+        # Парсим N (количество дней)
+        arg = (message.text or "").partition(" ")[2].strip()
+        try:
+            days = int(arg) if arg else 30
+        except ValueError:
+            days = 30
+        days = max(7, min(days, 365))  # ограничиваем 7…365
+
+        bookings = load_db().get("bookings", [])
+        today = datetime.date.today()
+        start = today - datetime.timedelta(days=days - 1)
+
+        # Группируем выручку и брони по дням
+        from collections import defaultdict as _dd
+        rev_by_day = _dd(int)
+        cnt_by_day = _dd(int)
+        for b in bookings:
+            d = b.get("date")
+            if not d or b.get("status") not in ("active", "completed"):
+                continue
+            try:
+                d_obj = datetime.date.fromisoformat(d)
+            except ValueError:
+                continue
+            if d_obj < start or d_obj > today:
+                continue
+            rev_by_day[d_obj] += b.get("total", 0)
+            cnt_by_day[d_obj] += 1
+
+        # Заполняем пропуски
+        xs = [start + datetime.timedelta(days=i) for i in range(days)]
+        ys_rev = [rev_by_day[d] for d in xs]
+        ys_cnt = [cnt_by_day[d] for d in xs]
+
+        await message.answer(f"📊 Рисую график за {days} дн…")
+
+        # Рендерим matplotlib (headless backend)
+        try:
+            import matplotlib
+            matplotlib.use("Agg")
+            import matplotlib.pyplot as plt
+            from matplotlib.dates import DateFormatter, AutoDateLocator
+        except ImportError:
+            await message.answer(
+                "⚠️ Не установлен matplotlib. "
+                "Добавьте `matplotlib==3.9.2` в requirements.txt и пересоберите проект.",
+                parse_mode="Markdown"
+            )
+            return
+
+        fig, ax1 = plt.subplots(figsize=(11, 5), dpi=130)
+        ax1.bar(xs, ys_rev, color="#E91E8C", alpha=0.85, label="Выручка, ₽", width=0.85)
+        ax1.set_ylabel("Выручка, ₽", color="#E91E8C", fontsize=11)
+        ax1.tick_params(axis="y", labelcolor="#E91E8C")
+        ax1.grid(True, axis="y", alpha=0.25, linestyle="--")
+        # Форматирование оси Y — с разделителями тысяч
+        ax1.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{int(x):,}".replace(",", " ")))
+
+        ax2 = ax1.twinx()
+        ax2.plot(xs, ys_cnt, color="#1A1A2E", marker="o", markersize=4, linewidth=2, label="Броней, шт")
+        ax2.set_ylabel("Броней, шт", color="#1A1A2E", fontsize=11)
+        ax2.tick_params(axis="y", labelcolor="#1A1A2E")
+
+        # Ось X — даты
+        ax1.xaxis.set_major_locator(AutoDateLocator())
+        ax1.xaxis.set_major_formatter(DateFormatter("%d.%m"))
+        fig.autofmt_xdate(rotation=35)
+
+        total_rev = sum(ys_rev)
+        total_cnt = sum(ys_cnt)
+        avg = (total_rev // days) if days else 0
+        plt.title(
+            f"Lock·39 — выручка по дням ({fmt_date_ru(start.isoformat())} — {fmt_date_ru(today.isoformat())})\n"
+            f"Итого: {total_rev:,} ₽ · {total_cnt} броней · среднее {avg:,} ₽/день",
+            fontsize=11
+        )
+        plt.tight_layout()
+
+        buf = io.BytesIO()
+        plt.savefig(buf, format="png", facecolor="white", bbox_inches="tight")
+        plt.close(fig)
+        buf.seek(0)
+
+        try:
+            photo = BufferedInputFile(buf.read(), filename=f"chart_{days}d.png")
+            await message.answer_photo(
+                photo,
+                caption=(
+                    f"📊 *Выручка за {days} дней*\n"
+                    f"💵 Итого: *{total_rev:,} ₽*\n"
+                    f"📋 Броней: *{total_cnt}*\n"
+                    f"📅 В среднем: *{avg:,} ₽/день*\n\n"
+                    f"_Подсказка: `/chart 7` или `/chart 90` — за другой период._"
+                ),
+                parse_mode="Markdown"
+            )
+        except Exception as e:
+            print(f"[chart] {e}")
+            await message.answer(f"⚠️ Ошибка отправки графика: {e}")
 
     @dp.message(Command("find"))
     async def cmd_find(message: types.Message):
@@ -1048,6 +1303,254 @@ if BOT_TOKEN:
             f"💰 {tariff_label} · 🎒 {items} шт · 💵 {total:,} ₽\n"
             f"_Админ: {message.from_user.full_name or message.from_user.id}_"
         )
+
+    # ──────── /broadcast — массовая рассылка клиентам (только главный админ) ────────
+
+    def _broadcast_recipients() -> set:
+        """Возвращает множество уникальных telegram_user_id всех клиентов,
+        которые когда-либо бронировали через бота."""
+        bookings = load_db().get("bookings", [])
+        ids = set()
+        for b in bookings:
+            uid = b.get("telegram_user_id")
+            if uid:
+                ids.add(int(uid))
+        return ids
+
+    @dp.message(Command("broadcast"))
+    async def cmd_broadcast(message: types.Message, state: FSMContext):
+        if not is_main_admin(message.from_user.id):
+            await message.answer(
+                "⛔ Массовая рассылка доступна только главному админу."
+                + ("\n_Главного админа задают в переменной MAIN_ADMIN_ID._" if is_admin(message.from_user.id) else ""),
+                parse_mode="Markdown"
+            )
+            return
+        recipients = _broadcast_recipients()
+        if not recipients:
+            await message.answer(
+                "📣 *Массовая рассылка*\n\n"
+                "Пока что нет клиентов, которым можно отправить сообщение "
+                "(в базе нет ни одной брони с telegram_user_id).",
+                parse_mode="Markdown"
+            )
+            return
+        kb = InlineKeyboardBuilder()
+        kb.add(InlineKeyboardButton(text="❌ Отмена", callback_data="bcast:cancel"))
+        await message.answer(
+            f"📣 *Массовая рассылка*\n"
+            f"━━━━━━━━━━━━━━\n"
+            f"Получателей: *{len(recipients)}* клиентов\n\n"
+            f"Пришлите текст сообщения (можно с эмодзи и форматированием Markdown).\n"
+            f"После этого я покажу превью и попрошу подтверждения.\n\n"
+            f"_Или нажмите «Отмена», чтобы выйти._",
+            parse_mode="Markdown",
+            reply_markup=kb.as_markup()
+        )
+        await state.set_state(BroadcastFSM.waiting_text)
+
+    @dp.callback_query(F.data == "bcast:cancel")
+    async def bcast_cancel(callback: types.CallbackQuery, state: FSMContext):
+        if not is_main_admin(callback.from_user.id):
+            await callback.answer("Доступ запрещён", show_alert=True)
+            return
+        await state.clear()
+        await callback.message.edit_text("❌ Рассылка отменена.")
+        await callback.answer()
+
+    @dp.message(BroadcastFSM.waiting_text)
+    async def bcast_got_text(message: types.Message, state: FSMContext):
+        if not is_main_admin(message.from_user.id):
+            return
+        text = (message.text or "").strip()
+        if not text:
+            await message.answer("Пустое сообщение, попробуйте ещё раз или /cancel.")
+            return
+        if len(text) > 4000:
+            await message.answer("Сообщение слишком длинное (макс. 4000 знаков). Сократите.")
+            return
+        recipients = _broadcast_recipients()
+        await state.update_data(text=text, recipient_count=len(recipients))
+
+        # Превью
+        kb = InlineKeyboardBuilder()
+        kb.row(InlineKeyboardButton(text="✅ Отправить всем", callback_data="bcast:send"))
+        kb.row(InlineKeyboardButton(text="❌ Отмена", callback_data="bcast:cancel"))
+
+        try:
+            await message.answer(
+                f"📣 *Превью сообщения* (получателей: {len(recipients)})\n"
+                f"━━━━━━━━━━━━━━\n\n"
+                f"{text}\n\n"
+                f"━━━━━━━━━━━━━━\n"
+                f"_Отправить всем {len(recipients)} клиентам?_",
+                parse_mode="Markdown",
+                reply_markup=kb.as_markup()
+            )
+        except Exception:
+            # Markdown в тексте сломан — покажем без форматирования
+            await message.answer(
+                f"📣 Превью (получателей: {len(recipients)})\n"
+                f"━━━━━━━━━━━━━━\n\n{text}\n\n"
+                f"━━━━━━━━━━━━━━\n"
+                f"⚠️ Внимание: Markdown в тексте может быть некорректен.\n"
+                f"Отправить всем?",
+                reply_markup=kb.as_markup()
+            )
+        await state.set_state(BroadcastFSM.waiting_confirm)
+
+    @dp.callback_query(F.data == "bcast:send", BroadcastFSM.waiting_confirm)
+    async def bcast_send(callback: types.CallbackQuery, state: FSMContext):
+        if not is_main_admin(callback.from_user.id):
+            await callback.answer("Доступ запрещён", show_alert=True)
+            return
+        data = await state.get_data()
+        text = data.get("text") or ""
+        await state.clear()
+        await callback.answer("Запускаю рассылку…")
+
+        recipients = list(_broadcast_recipients())
+        total = len(recipients)
+        status_msg = await callback.message.edit_text(
+            f"📣 *Идёт рассылка…*\n"
+            f"━━━━━━━━━━━━━━\n"
+            f"Получателей: {total}\n"
+            f"Отправлено: 0",
+            parse_mode="Markdown"
+        )
+
+        sent = 0
+        failed = 0
+        last_update = datetime.datetime.now()
+        # Лимит Telegram: 30 сообщений/сек разным чатам. Идём со скоростью ~25/сек.
+        for idx, uid in enumerate(recipients, 1):
+            try:
+                await bot.send_message(chat_id=uid, text=text, parse_mode="Markdown")
+                sent += 1
+            except Exception as e:
+                failed += 1
+                err_str = str(e).lower()
+                if "blocked" in err_str or "deactivated" in err_str or "forbidden" in err_str:
+                    pass  # клиент заблокировал бота — это нормально
+                else:
+                    print(f"[broadcast {uid}] {e}")
+            # Пауза, чтобы не упереться в Flood limit
+            await asyncio.sleep(0.04)
+            # Раз в 5 секунд обновляем статус
+            now = datetime.datetime.now()
+            if (now - last_update).total_seconds() >= 5:
+                try:
+                    await status_msg.edit_text(
+                        f"📣 *Идёт рассылка…*\n"
+                        f"━━━━━━━━━━━━━━\n"
+                        f"Получателей: {total}\n"
+                        f"Отправлено: {sent}\n"
+                        f"Не доставлено: {failed}",
+                        parse_mode="Markdown"
+                    )
+                    last_update = now
+                except Exception:
+                    pass
+
+        # Финальный отчёт
+        await status_msg.edit_text(
+            f"✅ *Рассылка завершена*\n"
+            f"━━━━━━━━━━━━━━\n"
+            f"Получателей: *{total}*\n"
+            f"📬 Доставлено: *{sent}*\n"
+            f"📭 Не доставлено: *{failed}*\n"
+            f"_(не доставлено = заблокировали бота или удалили аккаунт)_",
+            parse_mode="Markdown"
+        )
+
+    # ──────── Отслеживание отзывов ────────
+
+    @dp.callback_query(F.data.startswith("rev:done:"))
+    async def rev_done(callback: types.CallbackQuery):
+        """Клиент подтверждает, что оставил отзыв."""
+        bid = callback.data.split(":", 2)[2]
+        db = load_db()
+        booking = next((b for b in db.get("bookings", []) if b["booking_id"] == bid), None)
+        if not booking:
+            await callback.answer("Бронь не найдена", show_alert=True)
+            return
+        # Проверка: только клиент по этой брони может нажать
+        if booking.get("telegram_user_id") and booking["telegram_user_id"] != callback.from_user.id:
+            await callback.answer("Это чужая бронь", show_alert=True)
+            return
+        if booking.get("review_confirmed_at"):
+            await callback.answer("Спасибо, мы уже знаем 🙏", show_alert=True)
+            return
+
+        booking["review_confirmed_at"] = datetime.datetime.now().isoformat()
+        save_db(db)
+
+        await callback.answer("Спасибо! 🙏", show_alert=True)
+        # Заменяем кнопку на подтверждение
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+            await callback.message.answer(
+                "🙏 *Огромное спасибо за отзыв!*\n\n"
+                "Каждое слово помогает нашему маленькому делу. "
+                "Будем рады видеть вас снова в Зеленоградске. 🌊",
+                parse_mode="Markdown"
+            )
+        except Exception as e:
+            print(f"[rev_done edit] {e}")
+
+        # Уведомить админов
+        user_tag = f" (@{booking.get('telegram_username')})" if booking.get("telegram_username") else ""
+        await broadcast_to_admins(
+            f"⭐ *Клиент оставил отзыв!*\n"
+            f"━━━━━━━━━━━━━━\n"
+            f"🆔 `{bid}`\n"
+            f"👤 {booking.get('name','—')}{user_tag}\n"
+            f"📞 {booking.get('phone','—')}\n\n"
+            f"_Не забудьте сказать спасибо лично._"
+        )
+
+    @dp.message(Command("reviews"))
+    async def cmd_reviews(message: types.Message):
+        """Воронка отзывов: отправлено / подтверждено / ожидаем."""
+        if not is_admin(message.from_user.id):
+            await message.answer("⛔ Доступ запрещён.")
+            return
+        bookings = load_db().get("bookings", [])
+        requested = [b for b in bookings if b.get("review_requested")]
+        confirmed = [b for b in bookings if b.get("review_confirmed_at")]
+        pending = [b for b in requested if not b.get("review_confirmed_at")]
+        # Доля подтверждений
+        conv = (len(confirmed) / len(requested) * 100) if requested else 0
+
+        # Последние 5 подтверждённых
+        confirmed_sorted = sorted(
+            confirmed, key=lambda b: b.get("review_confirmed_at") or "", reverse=True
+        )
+        last_lines = []
+        for b in confirmed_sorted[:5]:
+            try:
+                ts = datetime.datetime.fromisoformat(b["review_confirmed_at"])
+                ts_str = ts.strftime("%d.%m %H:%M")
+            except Exception:
+                ts_str = "—"
+            user_tag = f" (@{b.get('telegram_username')})" if b.get('telegram_username') else ""
+            last_lines.append(f"  • {ts_str} — {b.get('name','—')}{user_tag}")
+
+        text = (
+            f"⭐ *Воронка отзывов*\n"
+            f"━━━━━━━━━━━━━━━━━━\n\n"
+            f"📤 Отправлено запросов: *{len(requested)}*\n"
+            f"✅ Подтвердили отзыв: *{len(confirmed)}*\n"
+            f"⏳ Ожидаем ответа: *{len(pending)}*\n"
+            f"📊 Конверсия: *{conv:.1f}%*\n\n"
+        )
+        if last_lines:
+            text += "*Последние подтверждения:*\n" + "\n".join(last_lines) + "\n\n"
+        text += (
+            f"_Цифра «подтвердили» = клиенты, нажавшие в боте «✅ Я уже оставил отзыв». "
+            f"Реальное число отзывов на Яндекс/2ГИС может быть выше._"
+        )
+        await message.answer(text, parse_mode="Markdown")
 
     @dp.message(Command("help"))
     async def cmd_help(message: types.Message):
@@ -1993,8 +2496,14 @@ async def set_bot_commands():
         BotCommand(command="tomorrow",   description="📅 Брони на завтра"),
         BotCommand(command="week",       description="📅 Брони на неделю"),
         BotCommand(command="stats",      description="📊 Статистика и выручка"),
+        BotCommand(command="chart",      description="📈 График выручки по дням"),
+        BotCommand(command="reviews",    description="⭐ Воронка отзывов"),
         BotCommand(command="find",       description="🔍 Найти клиента"),
         BotCommand(command="newbooking", description="📝 Создать бронь вручную"),
+    ]
+    # Главному админу — ещё и команда массовой рассылки
+    main_admin_commands = admin_commands + [
+        BotCommand(command="broadcast", description="📣 Массовая рассылка клиентам"),
     ]
     try:
         # Базовое меню — всем
@@ -2002,7 +2511,8 @@ async def set_bot_commands():
         # Расширенное меню — каждому админу персонально
         for aid in ADMIN_IDS:
             try:
-                await bot.set_my_commands(admin_commands, scope=BotCommandScopeChat(chat_id=aid))
+                cmds = main_admin_commands if aid == MAIN_ADMIN_ID else admin_commands
+                await bot.set_my_commands(cmds, scope=BotCommandScopeChat(chat_id=aid))
             except Exception as e:
                 print(f"[set_commands admin {aid}] {e}")
         print(f"📋 Меню команд зарегистрировано (базовое + расширенное для {len(ADMIN_IDS)} админов)")
@@ -2206,6 +2716,10 @@ async def send_review_and_promo(booking: dict):
     ikb = InlineKeyboardBuilder()
     ikb.row(InlineKeyboardButton(text="⭐ Отзыв на Яндекс.Картах", url=REVIEW_URL_YANDEX))
     ikb.row(InlineKeyboardButton(text="⭐ Отзыв на 2ГИС", url=REVIEW_URL_2GIS))
+    ikb.row(InlineKeyboardButton(
+        text="✅ Я уже оставил отзыв",
+        callback_data=f"rev:done:{booking['booking_id']}"
+    ))
 
     text = (
         f"🙏 *Спасибо, что были с нами!*\n"
@@ -2215,6 +2729,8 @@ async def send_review_and_promo(booking: dict):
         f"⭐ *Ваш отзыв очень важен для нас.*\n"
         f"Поделитесь впечатлениями — это помогает нам становиться лучше "
         f"и помогает другим путешественникам найти нас.\n\n"
+        f"_После публикации отзыва нажмите «✅ Я уже оставил отзыв» — "
+        f"мы об этом узнаем и скажем спасибо лично._\n\n"
         f"━━━━━━━━━━━━━━━━━━\n"
         f"🎁 *Подарок: ваш промокод*\n\n"
         f"`{promo['code']}`\n\n"
