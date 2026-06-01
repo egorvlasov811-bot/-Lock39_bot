@@ -3199,6 +3199,55 @@ def robots_txt():
     )
 
 
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon_ico():
+    if Path("favicon.ico").exists():
+        return FileResponse("favicon.ico", media_type="image/x-icon")
+    raise HTTPException(404)
+
+
+@app.get("/favicon.svg", include_in_schema=False)
+def favicon_svg():
+    if Path("favicon.svg").exists():
+        return FileResponse("favicon.svg", media_type="image/svg+xml")
+    raise HTTPException(404)
+
+
+@app.get("/favicon-96x96.png", include_in_schema=False)
+def favicon_png():
+    if Path("favicon-96x96.png").exists():
+        return FileResponse("favicon-96x96.png", media_type="image/png")
+    raise HTTPException(404)
+
+
+@app.get("/apple-touch-icon.png", include_in_schema=False)
+def apple_touch_icon():
+    if Path("apple-touch-icon.png").exists():
+        return FileResponse("apple-touch-icon.png", media_type="image/png")
+    raise HTTPException(404)
+
+
+@app.get("/web-app-manifest-192x192.png", include_in_schema=False)
+def pwa_icon_192():
+    if Path("web-app-manifest-192x192.png").exists():
+        return FileResponse("web-app-manifest-192x192.png", media_type="image/png")
+    raise HTTPException(404)
+
+
+@app.get("/web-app-manifest-512x512.png", include_in_schema=False)
+def pwa_icon_512():
+    if Path("web-app-manifest-512x512.png").exists():
+        return FileResponse("web-app-manifest-512x512.png", media_type="image/png")
+    raise HTTPException(404)
+
+
+@app.get("/site.webmanifest", include_in_schema=False)
+def webmanifest():
+    if Path("site.webmanifest").exists():
+        return FileResponse("site.webmanifest", media_type="application/manifest+json")
+    raise HTTPException(404)
+
+
 @app.get("/sitemap.xml")
 def sitemap_xml():
     """sitemap.xml — карта сайта для поисковиков."""
