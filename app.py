@@ -2938,9 +2938,11 @@ async def auto_review_loop():
 
 # Через сколько минут после окончания тарифа считать клиента не пришедшим
 NOSHOW_AFTER_MINUTES = 30
-# Час, в который отправлять ежедневную сводку (по серверному времени)
-DAILY_SUMMARY_HOUR = 20
-DAILY_SUMMARY_MINUTE = 0
+# Когда отправлять еженедельную сводку (по серверному времени)
+# 0=понедельник, 1=вторник, ..., 6=воскресенье
+WEEKLY_SUMMARY_WEEKDAY = 6
+WEEKLY_SUMMARY_HOUR = 20
+WEEKLY_SUMMARY_MINUTE = 0
 
 
 async def admin_notify_loop():
@@ -2948,11 +2950,17 @@ async def admin_notify_loop():
     Раз в минуту:
     - Проверяет активные брони и шлёт админам пинг по тем, где клиент не пришёл
       (время окончания + NOSHOW_AFTER_MINUTES уже наступило, ставит флаг noshow_notified).
-    - В DAILY_SUMMARY_HOUR:DAILY_SUMMARY_MINUTE — отправляет ежедневную сводку (1 раз в сутки).
+    - В WEEKLY_SUMMARY_WEEKDAY (день недели) в WEEKLY_SUMMARY_HOUR:WEEKLY_SUMMARY_MINUTE —
+      отправляет еженедельную сводку (1 раз в неделю).
     """
     if not bot:
         return
-    print(f"🔁 Admin-notify loop запущен (сводка в {DAILY_SUMMARY_HOUR:02d}:{DAILY_SUMMARY_MINUTE:02d})")
+    weekday_names = ["пн","вт","ср","чт","пт","сб","вс"]
+    print(
+        f"🔁 Admin-notify loop запущен "
+        f"(сводка по {weekday_names[WEEKLY_SUMMARY_WEEKDAY]} в "
+        f"{WEEKLY_SUMMARY_HOUR:02d}:{WEEKLY_SUMMARY_MINUTE:02d})"
+    )
     while True:
         try:
             await asyncio.sleep(60)
@@ -2994,53 +3002,89 @@ async def admin_notify_loop():
                 except Exception as e:
                     print(f"[noshow notify] {e}")
 
-            # 2) Ежедневная сводка в 20:00
+            # 2) Еженедельная сводка
             meta = db.setdefault("meta", {})
             today_iso = now.date().isoformat()
-            already_sent = meta.get("last_daily_summary_date") == today_iso
+            already_sent = meta.get("last_weekly_summary_date") == today_iso
             in_window = (
-                now.hour == DAILY_SUMMARY_HOUR
-                and DAILY_SUMMARY_MINUTE <= now.minute <= DAILY_SUMMARY_MINUTE + 5
+                now.weekday() == WEEKLY_SUMMARY_WEEKDAY
+                and now.hour == WEEKLY_SUMMARY_HOUR
+                and WEEKLY_SUMMARY_MINUTE <= now.minute <= WEEKLY_SUMMARY_MINUTE + 5
             )
             if in_window and not already_sent:
                 try:
                     bookings = db.get("bookings", [])
-                    todays = [b for b in bookings if b.get("date") == today_iso]
-                    revenue = sum(
-                        b.get("total", 0) for b in todays
-                        if b.get("status") in ("active", "completed")
-                    )
-                    completed_n = sum(1 for b in todays if b.get("status") == "completed")
-                    active_n = sum(1 for b in todays if b.get("status") == "active")
-                    cancelled_n = sum(1 for b in todays if b.get("status") == "cancelled")
-                    noshow_n = sum(
-                        1 for b in todays
-                        if b.get("status") == "active" and b.get("noshow_notified")
-                    )
-                    items_total = sum(
-                        b.get("items", 0) for b in todays
-                        if b.get("status") in ("active", "completed")
-                    )
-                    avg_check = (revenue // len(todays)) if todays else 0
+                    # Текущая неделя: последние 7 дней, включая сегодня
+                    week_start = now.date() - datetime.timedelta(days=6)
+                    week_start_iso = week_start.isoformat()
+                    # Предыдущая неделя: -13..-7 дней
+                    prev_start = now.date() - datetime.timedelta(days=13)
+                    prev_end = now.date() - datetime.timedelta(days=7)
+                    prev_start_iso = prev_start.isoformat()
+                    prev_end_iso = prev_end.isoformat()
+
+                    def _calc(bs):
+                        rev = sum(b.get("total", 0) for b in bs if b.get("status") in ("active", "completed"))
+                        completed = sum(1 for b in bs if b.get("status") == "completed")
+                        active = sum(1 for b in bs if b.get("status") == "active")
+                        cancelled = sum(1 for b in bs if b.get("status") == "cancelled")
+                        noshow = sum(1 for b in bs if b.get("status") == "active" and b.get("noshow_notified"))
+                        items = sum(b.get("items", 0) for b in bs if b.get("status") in ("active", "completed"))
+                        avg = (rev // len(bs)) if bs else 0
+                        unique_phones = len({
+                            "".join(c for c in (b.get("phone") or "") if c.isdigit())
+                            for b in bs if b.get("phone") and b.get("status") in ("active", "completed")
+                        })
+                        return dict(rev=rev, completed=completed, active=active,
+                                    cancelled=cancelled, noshow=noshow, items=items,
+                                    avg=avg, unique=unique_phones, total=len(bs))
+
+                    week_b = [b for b in bookings if b.get("date") and week_start_iso <= b["date"] <= today_iso]
+                    prev_b = [b for b in bookings if b.get("date") and prev_start_iso <= b["date"] <= prev_end_iso]
+                    cur = _calc(week_b)
+                    prev = _calc(prev_b)
+
+                    def _trend(c, p):
+                        if p == 0:
+                            return "🆕" if c > 0 else ""
+                        diff = ((c - p) / p) * 100
+                        sign = "↑" if diff >= 0 else "↓"
+                        return f"{sign}{abs(diff):.0f}%"
+
+                    # Лучший день недели
+                    from collections import defaultdict as _dd
+                    rev_by_day = _dd(int)
+                    for b in week_b:
+                        if b.get("status") in ("active", "completed") and b.get("date"):
+                            rev_by_day[b["date"]] += b.get("total", 0)
+                    if rev_by_day:
+                        best_d, best_r = max(rev_by_day.items(), key=lambda kv: kv[1])
+                        best_str = f"{fmt_date_ru(best_d)} — *{best_r:,} ₽*"
+                    else:
+                        best_str = "—"
 
                     summary = (
-                        f"📊 *Сводка за {fmt_date_ru(today_iso)}*\n"
+                        f"📊 *Еженедельная сводка*\n"
+                        f"📅 {fmt_date_ru(week_start_iso)} — {fmt_date_ru(today_iso)}\n"
                         f"━━━━━━━━━━━━━━━━━━\n\n"
-                        f"💵 *Выручка:* {revenue:,} ₽\n"
-                        f"📋 *Броней всего:* {len(todays)}\n"
-                        f"  ✅ Выполнено: {completed_n}\n"
-                        f"  🟢 Ещё активны: {active_n}\n"
-                        f"  ❌ Отменено: {cancelled_n}\n"
-                        f"  ⏰ Не пришли: {noshow_n}\n\n"
-                        f"🎒 *Мест занято:* {items_total}\n"
-                        f"💰 *Средний чек:* {avg_check:,} ₽\n\n"
-                        f"_Хорошего вечера! 🌙_"
+                        f"💵 *Выручка:* *{cur['rev']:,} ₽* {_trend(cur['rev'], prev['rev'])}\n"
+                        f"   _было неделю назад: {prev['rev']:,} ₽_\n\n"
+                        f"📋 *Броней:* *{cur['total']}* {_trend(cur['total'], prev['total'])}\n"
+                        f"  ✅ Выполнено: {cur['completed']}\n"
+                        f"  🟢 Ещё активны: {cur['active']}\n"
+                        f"  ❌ Отменено: {cur['cancelled']}\n"
+                        f"  ⏰ Не пришли: {cur['noshow']}\n\n"
+                        f"🎒 Мест занято: *{cur['items']}*\n"
+                        f"👥 Уникальных клиентов: *{cur['unique']}*\n"
+                        f"💰 Средний чек: *{cur['avg']:,} ₽*\n"
+                        f"🏆 Лучший день: {best_str}\n\n"
+                        f"_Удачной новой недели! 🌊_"
                     )
                     await broadcast_to_admins(summary)
-                    meta["last_daily_summary_date"] = today_iso
+                    meta["last_weekly_summary_date"] = today_iso
                     changed = True
                 except Exception as e:
-                    print(f"[daily summary] {e}")
+                    print(f"[weekly summary] {e}")
 
             if changed:
                 save_db(db)
