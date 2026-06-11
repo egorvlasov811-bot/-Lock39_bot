@@ -1,0 +1,14 @@
+.env
+.env.bak.*
+app.py.bak.*
+__pycache__/
+*.pyc
+.cache/
+.local/
+.config/
+.bash_logout
+.bashrc
+.profile
+bookings.json
+banned.json
+venv/
