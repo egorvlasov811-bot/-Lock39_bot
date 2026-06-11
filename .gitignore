@@ -12,3 +12,6 @@ __pycache__/
 bookings.json
 banned.json
 venv/
+
+.git-credentials
+.gitconfig
