@@ -15,3 +15,6 @@ venv/
 
 .git-credentials
 .gitconfig
+landing.html.bak.*
+site_stats.json
+*.bak
