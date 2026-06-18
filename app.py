@@ -8,11 +8,14 @@ import io
 import json
 import asyncio
 import datetime
+import hashlib
+import re
+from urllib.parse import urlparse
 from pathlib import Path
 from contextlib import asynccontextmanager
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, field_validator
@@ -33,6 +36,10 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 WEBAPP_URL = os.getenv("WEBAPP_URL", "")
 PORT = int(os.getenv("PORT", "8000"))
 DB_FILE = "bookings.json"
+SITE_STATS_FILE = "site_stats.json"
+SITE_STATS_RETENTION_DAYS = 90
+SITE_STATS_MAX_EVENTS = 50000
+TRACK_SALT = os.getenv("TRACK_SALT", "lock39-anonymize-salt-change-me")
 TOTAL_PLACES = 500
 
 
@@ -141,6 +148,135 @@ def load_db() -> dict:
 def save_db(data: dict):
     with open(DB_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+# ─────────── СТАТИСТИКА САЙТА (site_stats.json) ───────────
+
+ALLOWED_TRACK_EVENTS = {
+    "pageview",
+    "click_book",
+    "click_phone",
+    "click_whatsapp",
+    "click_tg_bot",
+    "click_ymaps",
+    "click_2gis",
+    "click_review",
+    "scroll_50",
+    "scroll_90",
+}
+
+EVENT_LABELS = {
+    "pageview":      "👁 Посещений",
+    "click_book":    "📅 Кликов «Забронировать»",
+    "click_phone":   "📞 Кликов по телефону",
+    "click_whatsapp":"💬 Кликов по WhatsApp",
+    "click_tg_bot":  "🤖 Переходов в Telegram-бот",
+    "click_ymaps":   "🗺 Кликов по Яндекс.Картам",
+    "click_2gis":    "🗺 Кликов по 2ГИС",
+    "click_review":  "⭐ Кликов «Оставить отзыв»",
+    "scroll_50":     "📜 Долистали до середины",
+    "scroll_90":     "📜 Долистали до конца",
+}
+
+SOURCE_LABELS = {
+    "yandex":   "🔍 Яндекс",
+    "google":   "🔍 Google",
+    "vk":       "🌐 ВКонтакте",
+    "telegram": "✈️ Telegram",
+    "whatsapp": "💬 WhatsApp",
+    "mailru":   "📧 Mail.ru",
+    "bing":     "🔍 Bing",
+    "duckduckgo":"🔍 DuckDuckGo",
+    "yandexmaps":"🗺 Я.Карты",
+    "2gis":     "🗺 2ГИС",
+    "tripadvisor":"🌍 Tripadvisor",
+    "direct":   "↗️ Прямой/закладки",
+    "other":    "❔ Другое",
+}
+
+
+def parse_referrer_source(referrer: str) -> str:
+    if not referrer:
+        return "direct"
+    try:
+        host = urlparse(referrer).netloc.lower()
+    except Exception:
+        return "other"
+    if not host:
+        return "direct"
+    if "yandex" in host and "maps" in host: return "yandexmaps"
+    if "yandex." in host or host.endswith(".ya.ru"): return "yandex"
+    if "google." in host: return "google"
+    if "vk.com" in host or "vk.ru" in host: return "vk"
+    if "t.me" in host or "telegram." in host: return "telegram"
+    if "wa.me" in host or "whatsapp" in host: return "whatsapp"
+    if "mail.ru" in host: return "mailru"
+    if "bing.com" in host: return "bing"
+    if "duckduckgo" in host: return "duckduckgo"
+    if "2gis" in host: return "2gis"
+    if "tripadvisor" in host: return "tripadvisor"
+    return "other"
+
+
+def anonymize_ip(ip: str) -> str:
+    if not ip:
+        return ""
+    return hashlib.sha256(f"{ip}|{TRACK_SALT}".encode()).hexdigest()[:12]
+
+
+def short_ua(ua: str) -> str:
+    if not ua:
+        return ""
+    u = ua.lower()
+    device = "📱 mobile" if any(x in u for x in ("iphone", "android", "mobile")) else "💻 desktop"
+    browser = "other"
+    if "yabrowser" in u: browser = "Yandex"
+    elif "edg/" in u or "edge" in u: browser = "Edge"
+    elif "chrome" in u and "safari" in u: browser = "Chrome"
+    elif "firefox" in u: browser = "Firefox"
+    elif "safari" in u: browser = "Safari"
+    return f"{device} · {browser}"
+
+
+def load_site_stats() -> dict:
+    if not Path(SITE_STATS_FILE).exists():
+        return {"events": []}
+    try:
+        with open(SITE_STATS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {"events": []}
+
+
+def save_site_stats(data: dict):
+    with open(SITE_STATS_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=1)
+
+
+def add_site_event(event: str, source: str, ip_hash: str, ua: str = "", page: str = "/", extras: Optional[dict] = None):
+    data = load_site_stats()
+    events = data.get("events", [])
+    record = {
+        "ts": datetime.datetime.now().isoformat(timespec="seconds"),
+        "event": event,
+        "source": source,
+        "vid": ip_hash,
+        "page": page or "/",
+    }
+    if ua:
+        record["ua"] = ua
+    if extras:
+        for k, v in extras.items():
+            if k not in record and isinstance(v, (str, int, float, bool)):
+                record[k] = v
+    events.append(record)
+    cutoff = (datetime.datetime.now() - datetime.timedelta(days=SITE_STATS_RETENTION_DAYS)).isoformat()
+    events = [e for e in events if e.get("ts", "") >= cutoff]
+    if len(events) > SITE_STATS_MAX_EVENTS:
+        events = events[-SITE_STATS_MAX_EVENTS:]
+    data["events"] = events
+    save_site_stats(data)
+
 
 def count_active_today() -> int:
     """Сколько броней активны сегодня."""
@@ -1236,6 +1372,96 @@ if BOT_TOKEN:
             f"_Подсказка: `/stats 2026-04` — стата за конкретный месяц_"
         )
         await message.answer(text, parse_mode="Markdown")
+
+    @dp.message(Command("sitestats"))
+    async def cmd_sitestats(message: types.Message):
+        """Аналитика сайта lock39.ru."""
+        if not is_admin(message.from_user.id):
+            await message.answer("⛔ Доступ запрещён.")
+            return
+        events = load_site_stats().get("events", [])
+        if not events:
+            await message.answer(
+                "📊 *Аналитика сайта*\n\n"
+                "_Событий пока нет._\n\n"
+                "Как только клиенты начнут заходить на lock39.ru и кликать, статистика появится здесь.",
+                parse_mode="Markdown",
+            )
+            return
+
+        now = datetime.datetime.now()
+        today_iso = now.date().isoformat()
+        week_cut = (now - datetime.timedelta(days=7)).isoformat()
+        month_cut = (now - datetime.timedelta(days=30)).isoformat()
+
+        def slice_events(filter_fn):
+            return [e for e in events if filter_fn(e)]
+
+        def summarize(evs):
+            counts = {k: 0 for k in EVENT_LABELS.keys()}
+            sources = {}
+            vids = set()
+            for e in evs:
+                ev = e.get("event", "")
+                if ev in counts:
+                    counts[ev] += 1
+                src = e.get("source", "other")
+                sources[src] = sources.get(src, 0) + 1
+                vid = e.get("vid")
+                if vid:
+                    vids.add(vid)
+            return counts, sources, len(vids)
+
+        today_evs = slice_events(lambda e: e.get("ts", "").startswith(today_iso))
+        week_evs = slice_events(lambda e: e.get("ts", "") >= week_cut)
+        month_evs = slice_events(lambda e: e.get("ts", "") >= month_cut)
+        all_evs = events
+
+        def fmt_block(title, evs):
+            counts, sources, uniq = summarize(evs)
+            pv = counts.get("pageview", 0)
+            book = counts.get("click_book", 0)
+            phone = counts.get("click_phone", 0)
+            wa = counts.get("click_whatsapp", 0)
+            tg = counts.get("click_tg_bot", 0)
+            ymaps = counts.get("click_ymaps", 0)
+            gis = counts.get("click_2gis", 0)
+            review = counts.get("click_review", 0)
+            s50 = counts.get("scroll_50", 0)
+            s90 = counts.get("scroll_90", 0)
+            conv = (book / pv * 100) if pv else 0
+            engaged = (s50 / pv * 100) if pv else 0
+            lines = [
+                f"*{title}*",
+                f"👁 Посещений: *{pv}*  (уникальных: {uniq})",
+            ]
+            if pv:
+                lines.append(f"📅 «Забронировать»: *{book}*  ({conv:.1f}% конверсия)")
+            if phone:  lines.append(f"📞 Телефон: {phone}")
+            if wa:     lines.append(f"💬 WhatsApp: {wa}")
+            if tg:     lines.append(f"🤖 Telegram-бот: {tg}")
+            if ymaps:  lines.append(f"🗺 Я.Карты: {ymaps}")
+            if gis:    lines.append(f"🗺 2ГИС: {gis}")
+            if review: lines.append(f"⭐ «Оставить отзыв»: {review}")
+            if s50 or s90:
+                lines.append(f"📜 До середины/конца: {s50}/{s90}  ({engaged:.0f}% вовлечённость)")
+            if sources:
+                top = sorted(sources.items(), key=lambda x: -x[1])[:5]
+                src_line = ", ".join(f"{SOURCE_LABELS.get(s, s)} {n}" for s, n in top)
+                lines.append(f"📥 Источники: {src_line}")
+            return "\n".join(lines)
+
+        first_ts = events[0].get("ts", "")[:10] if events else "—"
+        text = (
+            "📊 *Аналитика сайта lock39.ru*\n\n"
+            + fmt_block("Сегодня", today_evs) + "\n\n"
+            + fmt_block("За 7 дней", week_evs) + "\n\n"
+            + fmt_block("За 30 дней", month_evs) + "\n\n"
+            + fmt_block(f"За всё время (с {first_ts})", all_evs) + "\n\n"
+            + "_Подробная аналитика — в Яндекс.Метрике, счётчик 109573035._"
+        )
+        await message.answer(text, parse_mode="Markdown")
+
 
     @dp.message(Command("chart"))
     async def cmd_chart(message: types.Message):
@@ -2845,6 +3071,7 @@ async def set_bot_commands():
         BotCommand(command="tomorrow",   description="📅 Брони на завтра"),
         BotCommand(command="week",       description="📅 Брони на неделю"),
         BotCommand(command="stats",      description="📊 Статистика и выручка"),
+        BotCommand(command="sitestats",  description="📈 Аналитика сайта (клики)"),
         BotCommand(command="chart",      description="📈 График выручки по дням"),
         BotCommand(command="reviews",    description="⭐ Воронка отзывов"),
         BotCommand(command="find",       description="🔍 Найти клиента"),
@@ -3379,6 +3606,33 @@ async def create_booking(req: BookingRequest):
     asyncio.create_task(notify_admin(booking))
     free = max(0, TOTAL_PLACES - count_active_today())
     return {"success": True, "booking_id": req.booking_id, "free": free}
+
+
+@app.post("/api/track")
+async def track_event(req: Request):
+    """Принимает событие с фронта и сохраняет в site_stats.json."""
+    try:
+        body = await req.json()
+    except Exception:
+        raise HTTPException(400, "Invalid JSON")
+    event = str(body.get("event", "")).strip().lower()
+    if event not in ALLOWED_TRACK_EVENTS:
+        raise HTTPException(400, "Unknown event")
+    referrer = str(body.get("referrer", ""))[:300]
+    page = str(body.get("page", "/"))[:120]
+    ua = req.headers.get("user-agent", "")[:300]
+    fwd = req.headers.get("x-forwarded-for", "")
+    real_ip = fwd.split(",")[0].strip() if fwd else (req.client.host if req.client else "")
+    source = parse_referrer_source(referrer)
+    ip_hash = anonymize_ip(real_ip)
+    ua_short = short_ua(ua)
+    extras = body.get("extras") if isinstance(body.get("extras"), dict) else None
+    try:
+        add_site_event(event, source, ip_hash, ua=ua_short, page=page, extras=extras)
+    except Exception as e:
+        print(f"[track] {e}")
+        return {"ok": False}
+    return {"ok": True}
 
 
 @app.get("/api/bookings")
