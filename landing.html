@@ -584,6 +584,7 @@ document.addEventListener('DOMContentLoaded', async function() {
 (function(){
   var sent = {};
   function send(event, extras){
+    try { if (window.ym) ym(109573035, 'reachGoal', event); } catch(e){}
     try {
       var body = {
         event: event,
