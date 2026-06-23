@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Lock·39 — камера хранения багажа в Зеленоградске · 50 м от вокзала</title>
-<meta name="description" content="Камера хранения багажа в Зеленоградске у ж/д вокзала. От 200 ₽ за 3 часа. Бронирование через Telegram-бот за минуту. Видеонаблюдение 24/7. Доступная среда без ступенек. Работаем с 9:00 до 19:00, после — по звонку.">
+<meta name="description" content="Камера хранения багажа в Зеленоградске. 50 м от вокзала, 1 этаж, без ступенек. Видеонаблюдение 24/7. От 200 ₽. Бронь через Telegram-бот за минуту. Wi-Fi, взвешивание, холодильник — бесплатно.">
 <meta name="keywords" content="камера хранения зеленоградск, хранение багажа зеленоградск, lock39, куда сдать чемодан зеленоградск, камера хранения у вокзала">
 <meta name="robots" content="index, follow">
 <link rel="canonical" href="https://lock39.ru/">
@@ -14,7 +14,7 @@
 
 <meta property="og:type" content="website">
 <meta property="og:title" content="Lock·39 — камера хранения багажа в Зеленоградске">
-<meta property="og:description" content="50 м от ж/д вокзала. Бронь через Telegram за минуту. От 200 ₽. Видеонаблюдение 24/7. Без ступенек.">
+<meta property="og:description" content="50 м от ж/д вокзала. Бронь через Telegram за минуту. От 200 ₽. Видеонаблюдение 24/7. Без ступенек. Wi-Fi, взвешивание, холодильник — бесплатно.">
 <meta property="og:url" content="https://lock39.ru/">
 <meta property="og:locale" content="ru_RU">
 <meta property="og:image" content="https://lock39.ru/web-app-manifest-512x512.png">
@@ -37,7 +37,7 @@
   "@type": "SelfStorage",
   "name": "Lock·39",
   "alternateName": "Камера хранения Lock·39",
-  "description": "Камера хранения багажа в Зеленоградске. 50 м от ж/д вокзала. Бронирование через Telegram-бот за минуту.",
+  "description": "Камера хранения багажа в Зеленоградске. 50 м от ж/д вокзала, 1 этаж без ступенек. Бронирование через Telegram-бот за минуту. Wi-Fi, взвешивание багажа и холодильник — бесплатно.",
   "image": "https://lock39.ru/web-app-manifest-512x512.png",
   "url": "https://lock39.ru/",
   "telephone": "+79969590213",
@@ -100,12 +100,12 @@
     "acceptedAnswer": {"@type": "Answer", "text": "Да, по предварительному звонку. Тариф «после 19:00» — 100 ₽ за каждый дополнительный час."}
   },{
     "@type": "Question",
-    "name": "Что можно хранить?",
-    "acceptedAnswer": {"@type": "Answer", "text": "Чемоданы, рюкзаки, сумки, пакеты, велосипеды, самокаты, лыжи, сёрфы, коробки. Каждое место получает индивидуальный номер."}
+    "name": "Что входит бесплатно?",
+    "acceptedAnswer": {"@type": "Answer", "text": "Wi-Fi, взвешивание багажа, использование холодильника для скоропортящихся продуктов и медикаментов, туалет, зарядка устройств."}
   },{
     "@type": "Question",
     "name": "Это безопасно?",
-    "acceptedAnswer": {"@type": "Answer", "text": "Видеонаблюдение 24/7, охраняемое помещение. За всё время работы — ни одной потери. Документы и крупные суммы рекомендуем оставлять при себе."}
+    "acceptedAnswer": {"@type": "Answer", "text": "Видеонаблюдение 24/7, охраняемое помещение. За всё время работы — ни одной потери. Уборка дважды в день."}
   }]
 }
 </script>
@@ -124,6 +124,7 @@
   --line:#ECECEC;
   --r:18px;
   --shadow:0 4px 20px rgba(255,61,138,.08);
+  --shadow-lg:0 12px 40px rgba(255,61,138,.18);
 }
 html{scroll-behavior:smooth;-webkit-text-size-adjust:100%}
 body{
@@ -159,18 +160,14 @@ header{
 }
 .nav{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0}
 .logo{display:flex;align-items:center;gap:8px;font-weight:800;font-size:22px;letter-spacing:-.5px}
-.logo .dot{
-  width:10px;height:10px;border-radius:50%;background:var(--grad);display:inline-block;
-}
+.logo .dot{width:10px;height:10px;border-radius:50%;background:var(--grad);display:inline-block}
 .nav-right{display:flex;align-items:center;gap:10px}
 .nav-phone{display:none;font-weight:600;font-size:15px;color:var(--ink)}
 .nav-phone:hover{color:var(--pink)}
 @media(min-width:680px){.nav-phone{display:inline}}
 
 /* HERO */
-.hero{
-  position:relative;padding:48px 0 56px;text-align:center;overflow:hidden;
-}
+.hero{position:relative;padding:48px 0 56px;text-align:center;overflow:hidden}
 .hero::before{
   content:"";position:absolute;inset:0;z-index:0;
   background:radial-gradient(60% 50% at 50% 0%,rgba(255,61,138,.10),transparent 70%),
@@ -187,26 +184,29 @@ h1{
   margin-bottom:18px;
 }
 h1 .grad{background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}
-.lead{font-size:clamp(16px,3.5vw,20px);color:var(--muted);max-width:640px;margin:0 auto 28px}
+.lead{font-size:clamp(16px,3.5vw,20px);color:var(--muted);max-width:680px;margin:0 auto 14px}
+.hero-utp{
+  display:flex;justify-content:center;flex-wrap:wrap;gap:8px;
+  margin:0 auto 28px;max-width:720px;
+}
+.hero-utp span{
+  background:#fff;border:1px solid var(--line);padding:8px 14px;border-radius:999px;
+  font-size:14px;font-weight:600;color:var(--ink);
+}
+.hero-utp span::before{content:"✓ ";color:var(--pink);font-weight:800}
 .hero-cta{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
 .hero-meta{
   margin-top:36px;display:grid;gap:14px;
   grid-template-columns:repeat(2,1fr);max-width:560px;margin-left:auto;margin-right:auto;
 }
 @media(min-width:680px){.hero-meta{grid-template-columns:repeat(4,1fr);max-width:none}}
-.meta-card{
-  background:#fff;border-radius:var(--r);padding:16px 12px;text-align:center;
-  border:1px solid var(--line);
-}
+.meta-card{background:#fff;border-radius:var(--r);padding:16px 12px;text-align:center;border:1px solid var(--line)}
 .meta-card .num{font-size:22px;font-weight:800;background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}
 .meta-card .lbl{font-size:13px;color:var(--muted);margin-top:4px}
 
 /* SOCIAL */
 .social{padding:32px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line);background:#fff}
-.social-row{
-  display:grid;gap:14px;
-  grid-template-columns:1fr;
-}
+.social-row{display:grid;gap:14px;grid-template-columns:1fr}
 @media(min-width:680px){.social-row{grid-template-columns:repeat(2,1fr)}}
 .review-card{
   display:flex;align-items:center;gap:14px;padding:18px 20px;border-radius:var(--r);
@@ -220,24 +220,17 @@ h1 .grad{background:var(--grad);-webkit-background-clip:text;background-clip:tex
 
 /* SECTION */
 section.s{padding:60px 0}
-.s-title{
-  text-align:center;font-size:clamp(24px,4.5vw,36px);font-weight:800;
-  margin-bottom:14px;letter-spacing:-.5px;
-}
+.s-title{text-align:center;font-size:clamp(24px,4.5vw,36px);font-weight:800;margin-bottom:14px;letter-spacing:-.5px}
 .s-sub{text-align:center;color:var(--muted);max-width:600px;margin:0 auto 36px;font-size:16px}
 
 /* HOW IT WORKS */
 .steps{display:grid;gap:18px;grid-template-columns:1fr}
 @media(min-width:680px){.steps{grid-template-columns:repeat(2,1fr)}}
 @media(min-width:980px){.steps{grid-template-columns:repeat(4,1fr)}}
-.step{
-  background:#fff;border-radius:var(--r);padding:24px 20px;border:1px solid var(--line);
-  position:relative;
-}
+.step{background:#fff;border-radius:var(--r);padding:24px 20px;border:1px solid var(--line);position:relative}
 .step .n{
-  display:inline-flex;align-items:center;justify-content:center;
-  width:36px;height:36px;border-radius:50%;background:var(--grad);color:#fff;
-  font-weight:800;font-size:16px;margin-bottom:14px;
+  display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;
+  border-radius:50%;background:var(--grad);color:#fff;font-weight:800;font-size:16px;margin-bottom:14px;
 }
 .step h3{font-size:18px;font-weight:700;margin-bottom:6px}
 .step p{font-size:15px;color:var(--muted);line-height:1.5}
@@ -262,55 +255,103 @@ section.s{padding:60px 0}
 .t-price{font-size:32px;font-weight:800;letter-spacing:-1px;margin-top:6px;line-height:1}
 .t-price small{font-size:14px;font-weight:500;color:var(--muted);display:block;margin-top:6px;letter-spacing:0}
 
-/* FEATURES */
-.features{display:grid;gap:16px;grid-template-columns:1fr}
-@media(min-width:680px){.features{grid-template-columns:repeat(2,1fr)}}
-@media(min-width:980px){.features{grid-template-columns:repeat(4,1fr)}}
-.feature{
-  background:#fff;border-radius:var(--r);padding:24px 20px;border:1px solid var(--line);text-align:center;
+/* BONUSES — free services */
+.bonuses-section{background:var(--grad-soft)}
+.bonuses{display:grid;gap:16px;grid-template-columns:1fr}
+@media(min-width:680px){.bonuses{grid-template-columns:repeat(2,1fr)}}
+@media(min-width:980px){.bonuses{grid-template-columns:repeat(3,1fr)}}
+.bonus{
+  position:relative;background:#fff;border-radius:var(--r);padding:24px 22px;border:1px solid var(--line);
+  transition:transform .15s,box-shadow .2s;overflow:hidden;
 }
-.feature .ico{
-  font-size:36px;margin-bottom:10px;display:inline-block;
+.bonus:hover{transform:translateY(-3px);box-shadow:var(--shadow)}
+.bonus .free-tag{
+  position:absolute;top:14px;right:14px;background:var(--grad);color:#fff;
+  font-size:10px;font-weight:800;letter-spacing:.8px;padding:5px 10px;border-radius:999px;
+  text-transform:uppercase;box-shadow:0 4px 12px rgba(255,61,138,.35);
 }
-.feature h3{font-size:17px;font-weight:700;margin-bottom:6px}
-.feature p{font-size:14px;color:var(--muted);line-height:1.5}
+.bonus .ico{font-size:36px;margin-bottom:10px;display:inline-block}
+.bonus h3{font-size:18px;font-weight:700;margin-bottom:6px;padding-right:80px}
+.bonus p{font-size:15px;color:var(--muted);line-height:1.5}
+
+/* SAFETY */
+.safety{background:var(--ink);color:#fff;padding:64px 0}
+.safety .s-title{color:#fff}
+.safety .s-sub{color:rgba(255,255,255,.7)}
+.safety-grid{display:grid;gap:18px;grid-template-columns:1fr}
+@media(min-width:680px){.safety-grid{grid-template-columns:repeat(2,1fr)}}
+@media(min-width:980px){.safety-grid{grid-template-columns:repeat(4,1fr)}}
+.safety-card{
+  background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.10);
+  border-radius:var(--r);padding:24px 20px;
+}
+.safety-card .ico{font-size:40px;margin-bottom:10px;display:inline-block;filter:saturate(1.2)}
+.safety-card h3{font-size:18px;font-weight:700;margin-bottom:6px;color:#fff}
+.safety-card p{font-size:14px;color:rgba(255,255,255,.7);line-height:1.5}
+
+/* REVIEWS — quotes */
+.quotes{display:grid;gap:18px;grid-template-columns:1fr}
+@media(min-width:880px){.quotes{grid-template-columns:repeat(3,1fr)}}
+.quote{
+  background:#fff;border-radius:var(--r);padding:24px;border:1px solid var(--line);
+  display:flex;flex-direction:column;gap:12px;position:relative;
+}
+.quote::before{
+  content:"❝";position:absolute;top:-12px;left:18px;font-size:80px;line-height:1;
+  color:var(--pink);opacity:.18;font-family:Georgia,serif;
+}
+.quote .stars{font-size:14px;letter-spacing:2px;color:#FFB400;position:relative}
+.quote .text{font-size:15px;line-height:1.6;color:var(--ink);position:relative;flex:1}
+.quote .author{
+  display:flex;align-items:center;gap:12px;padding-top:12px;border-top:1px solid var(--line);position:relative;
+}
+.quote .avatar{
+  width:42px;height:42px;border-radius:50%;background:var(--grad);
+  display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:16px;flex-shrink:0;
+}
+.quote .meta b{font-size:14px;display:block;line-height:1.2}
+.quote .meta span{font-size:12px;color:var(--muted)}
+.reviews-cta{text-align:center;margin-top:32px;display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
 
 /* CONTACTS */
-.contacts{background:#fff;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
-.c-grid{
-  display:grid;gap:24px;grid-template-columns:1fr;align-items:start;
-}
-@media(min-width:880px){.c-grid{grid-template-columns:1fr 1fr;gap:40px}}
+.contacts{position:relative;padding:72px 0;background:linear-gradient(180deg,#fff 0%,var(--grad-soft) 100%);border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+.c-grid{display:grid;gap:24px;grid-template-columns:1fr;align-items:stretch}
+@media(min-width:880px){.c-grid{grid-template-columns:1fr 1.2fr;gap:32px}}
 .c-block{
-  background:var(--grad-soft);border-radius:var(--r);padding:24px;border:1px solid var(--line);
+  background:#fff;border-radius:var(--r);padding:28px;border:2px solid var(--pink);
+  box-shadow:var(--shadow-lg);display:flex;flex-direction:column;
 }
-.c-item{display:flex;align-items:flex-start;gap:12px;padding:10px 0;border-bottom:1px solid rgba(0,0,0,.06)}
-.c-item:last-child{border-bottom:0}
-.c-item .ico{font-size:20px;flex-shrink:0;margin-top:2px}
+.c-item{display:flex;align-items:flex-start;gap:14px;padding:14px 0;border-bottom:1px solid rgba(0,0,0,.06)}
+.c-item:last-of-type{border-bottom:0}
+.c-item .ico{
+  font-size:22px;flex-shrink:0;margin-top:2px;
+  width:42px;height:42px;border-radius:50%;background:var(--grad-soft);
+  display:flex;align-items:center;justify-content:center;
+}
 .c-item .v{flex:1;min-width:0}
-.c-item .v b{font-size:15px;display:block;margin-bottom:2px;color:var(--ink)}
-.c-item .v span,.c-item .v a{font-size:15px;color:var(--muted);word-wrap:break-word;display:block}
+.c-item .v b{font-size:13px;text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:4px;color:var(--muted);font-weight:700}
+.c-item .v span,.c-item .v a{font-size:16px;color:var(--ink);word-wrap:break-word;display:block;font-weight:600}
 .c-item .v a:hover{color:var(--pink)}
-.c-links{display:flex;flex-wrap:wrap;gap:10px;margin-top:18px}
+.c-item .v .sub{font-size:13px;color:var(--muted);font-weight:400;margin-top:2px}
+.c-links{display:flex;flex-wrap:wrap;gap:8px;margin-top:18px}
 .c-links a{
   display:inline-flex;align-items:center;gap:6px;padding:10px 14px;border-radius:999px;
   background:#fff;border:1px solid var(--line);font-size:14px;font-weight:600;
-  transition:border-color .2s,color .2s;
+  transition:border-color .2s,color .2s,transform .15s;
 }
-.c-links a:hover{border-color:var(--pink);color:var(--pink)}
+.c-links a:hover{border-color:var(--pink);color:var(--pink);transform:translateY(-2px)}
+.route-btn{margin-top:18px;width:100%}
 .map-block{
-  border-radius:var(--r);overflow:hidden;border:1px solid var(--line);
-  min-height:320px;display:flex;flex-direction:column;
+  border-radius:var(--r);overflow:hidden;border:2px solid var(--line);
+  min-height:380px;display:flex;flex-direction:column;background:#fff;
+  box-shadow:var(--shadow);
 }
-.map-block iframe{flex:1;min-height:320px;border:0;width:100%;display:block}
+.map-block iframe{flex:1;min-height:380px;border:0;width:100%;display:block}
 
 /* FAQ */
 .faq{max-width:780px;margin:0 auto}
 .faq-item{background:#fff;border:1px solid var(--line);border-radius:var(--r);margin-bottom:10px;overflow:hidden}
-.faq-q{
-  width:100%;padding:18px 20px;text-align:left;display:flex;justify-content:space-between;
-  align-items:center;gap:12px;font-size:16px;font-weight:600;background:#fff;
-}
+.faq-q{width:100%;padding:18px 20px;text-align:left;display:flex;justify-content:space-between;align-items:center;gap:12px;font-size:16px;font-weight:600;background:#fff}
 .faq-q .chev{font-size:20px;color:var(--pink);transition:transform .2s;flex-shrink:0}
 .faq-item.open .faq-q .chev{transform:rotate(45deg)}
 .faq-a{max-height:0;overflow:hidden;transition:max-height .3s ease}
@@ -318,10 +359,7 @@ section.s{padding:60px 0}
 .faq-a div{padding:0 20px 20px;color:var(--muted);font-size:15px;line-height:1.6}
 
 /* FINAL CTA */
-.final{
-  margin:60px 0;padding:48px 30px;border-radius:24px;text-align:center;
-  background:var(--grad);color:#fff;
-}
+.final{margin:60px 0;padding:48px 30px;border-radius:24px;text-align:center;background:var(--grad);color:#fff}
 .final h2{font-size:clamp(24px,4.5vw,32px);font-weight:800;margin-bottom:10px;letter-spacing:-.5px}
 .final p{font-size:16px;opacity:.9;margin-bottom:24px;max-width:520px;margin-left:auto;margin-right:auto}
 .final .btn-primary{background:#fff;color:var(--pink);box-shadow:0 6px 20px rgba(0,0,0,.15)}
@@ -331,14 +369,6 @@ section.s{padding:60px 0}
 footer{padding:32px 0;text-align:center;font-size:13px;color:var(--muted);border-top:1px solid var(--line)}
 footer a{color:var(--muted);margin:0 6px}
 footer a:hover{color:var(--pink)}
-
-/* TOAST */
-.toast{
-  position:fixed;left:50%;bottom:24px;transform:translateX(-50%);
-  background:var(--ink);color:#fff;padding:12px 20px;border-radius:999px;
-  font-size:14px;opacity:0;pointer-events:none;transition:opacity .25s;z-index:99;
-}
-.toast.show{opacity:1}
 
 @media(prefers-reduced-motion:reduce){*{transition:none!important;scroll-behavior:auto!important}}
 
@@ -350,6 +380,8 @@ footer a:hover{color:var(--pink)}
   .hero-cta .btn{width:100%}
   .nav-right .btn{padding:10px 18px;font-size:14px;min-height:42px}
   .final{margin:44px 0;padding:36px 22px;border-radius:18px}
+  .bonus h3{padding-right:70px}
+  .c-block,.map-block{min-height:auto}
 }
 </style>
 </head>
@@ -374,7 +406,13 @@ footer a:hover{color:var(--pink)}
   <div class="wrap">
     <span class="eyebrow">⭐ 5.0 · 90+ отзывов на картах</span>
     <h1>Камера хранения багажа<br><span class="grad">в Зеленоградске</span></h1>
-    <p class="lead">50 метров от ж/д вокзала. Бронь через Telegram-бот за 1 минуту.<br>От 200 ₽. Видеонаблюдение 24/7. Без ступенек.</p>
+    <p class="lead">Первая туристическая камера хранения у самого вокзала.<br>Сдайте чемодан за минуту — гуляйте налегке.</p>
+    <div class="hero-utp">
+      <span>50 м от вокзала</span>
+      <span>1 этаж, без ступенек</span>
+      <span>Видеонаблюдение 24/7</span>
+      <span>Бронь за 1 минуту</span>
+    </div>
     <div class="hero-cta">
       <a href="https://t.me/Lock39_bot" class="btn btn-primary" data-track="click_book">📅 Забронировать в боте</a>
       <a href="#tariffs" class="btn btn-secondary">Тарифы и цены</a>
@@ -480,39 +518,121 @@ footer a:hover{color:var(--pink)}
   </div>
 </section>
 
-<section class="s">
+<section class="s bonuses-section">
   <div class="wrap">
-    <h2 class="s-title">Безопасно и удобно</h2>
-    <p class="s-sub">Всё продумано так, чтобы вы с лёгким сердцем гуляли по Зеленоградску.</p>
-    <div class="features">
-      <div class="feature">
-        <span class="ico">📹</span>
-        <h3>Видеонаблюдение 24/7</h3>
-        <p>Помещение охраняется круглосуточно. За всё время — ни одной потери.</p>
+    <h2 class="s-title">Бесплатные бонусы для гостей</h2>
+    <p class="s-sub">Пока ваш багаж у нас — пользуйтесь нашим сервисом без доплат.</p>
+    <div class="bonuses">
+      <div class="bonus">
+        <span class="free-tag">Бесплатно</span>
+        <span class="ico">📶</span>
+        <h3>Wi-Fi</h3>
+        <p>Скоростной интернет — ответить на письма, забронировать отель, пока ждёте свой поезд.</p>
       </div>
-      <div class="feature">
-        <span class="ico">♿</span>
-        <h3>Без ступенек</h3>
-        <p>Удобный вход с чемоданом на колёсиках, коляской или велосипедом.</p>
+      <div class="bonus">
+        <span class="free-tag">Бесплатно</span>
+        <span class="ico">⚖️</span>
+        <h3>Взвешивание багажа</h3>
+        <p>Узнайте точный вес чемодана перед поездом или перелётом. Без сюрпризов на стойке регистрации.</p>
       </div>
-      <div class="feature">
-        <span class="ico">🚉</span>
-        <h3>50 м от вокзала</h3>
-        <p>1 минута пешком от платформы. Не успеете промокнуть, если дождь.</p>
+      <div class="bonus">
+        <span class="free-tag">Бесплатно</span>
+        <span class="ico">🧊</span>
+        <h3>Холодильник</h3>
+        <p>Скоропортящиеся продукты, копчёный угорь или медикаменты — оставьте, доедет в идеале.</p>
       </div>
-      <div class="feature">
-        <span class="ico">📱</span>
-        <h3>QR за минуту</h3>
-        <p>Бронь, оплата, QR — в одном Telegram-боте. Без бумаг и очередей.</p>
+      <div class="bonus">
+        <span class="free-tag">Бесплатно</span>
+        <span class="ico">🔌</span>
+        <h3>Зарядка устройств</h3>
+        <p>Розетки и USB. Подзарядим телефон, ноутбук или powerbank, пока вы гуляете.</p>
+      </div>
+      <div class="bonus">
+        <span class="free-tag">Бесплатно</span>
+        <span class="ico">🚻</span>
+        <h3>Туалет</h3>
+        <p>Чистый и тёплый, для наших гостей. Не нужно искать платный туалет на вокзале.</p>
+      </div>
+      <div class="bonus">
+        <span class="free-tag">Бесплатно</span>
+        <span class="ico">💼</span>
+        <h3>Стрейч-плёнка</h3>
+        <p>Защитная обёртка для чемодана — попроси у администратора, обернём при сдаче.</p>
       </div>
     </div>
   </div>
 </section>
 
-<section class="contacts s" id="contacts">
+<section class="safety">
   <div class="wrap">
-    <h2 class="s-title">Где нас найти</h2>
-    <p class="s-sub">Зеленоградск, ул. Железнодорожная, 2Б корп. 1. Прямо у ж/д вокзала.</p>
+    <h2 class="s-title">Безопасно. Удобно. Чисто.</h2>
+    <p class="s-sub">Мы знаем, что чемодан — это часть вашей жизни. Поэтому относимся как к своему.</p>
+    <div class="safety-grid">
+      <div class="safety-card">
+        <span class="ico">📹</span>
+        <h3>Видеонаблюдение 24/7</h3>
+        <p>Каждый угол помещения под камерами. Запись хранится месяц. За всё время — ни одной потери.</p>
+      </div>
+      <div class="safety-card">
+        <span class="ico">✨</span>
+        <h3>Чисто как в аптеке</h3>
+        <p>Уборка дважды в день. Полки протираем. В ячейке ваш чемодан стоит на чистом коврике.</p>
+      </div>
+      <div class="safety-card">
+        <span class="ico">♿</span>
+        <h3>Без ступенек, 1 этаж</h3>
+        <p>Удобный въезд с улицы. Подойдёт людям с инвалидностью, мамам с колясками, велосипедистам.</p>
+      </div>
+      <div class="safety-card">
+        <span class="ico">❄️</span>
+        <h3>Прохладно в жару</h3>
+        <p>Помещение проветривается и охлаждается. Шоколад не растает, кожаный чемодан не загнётся.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="s" id="reviews">
+  <div class="wrap">
+    <h2 class="s-title">Что говорят гости</h2>
+    <p class="s-sub">5.0 на Яндекс.Картах и 2ГИС — 90+ оценок от настоящих туристов.</p>
+    <div class="quotes">
+      <article class="quote">
+        <div class="stars">★★★★★</div>
+        <div class="text">Приехали с поезда в 9 утра, сдали чемоданы в Lock·39 и сразу пошли на променад. Гуляли весь день налегке, в 6 вечера забрали и поехали в Калининград. Бронировали через бот — это вообще огонь, никаких бумажек!</div>
+        <div class="author">
+          <div class="avatar">А</div>
+          <div class="meta"><b>Анна, Москва</b><span>Турист · июль 2025</span></div>
+        </div>
+      </article>
+      <article class="quote">
+        <div class="stars">★★★★★</div>
+        <div class="text">Удобство в том, что прямо у вокзала. Не нужно искать камеру хранения по всему городу. Без ступенек, легко закатил большой чемодан на колёсиках. Цена честная, ребята отзывчивые. Рекомендую!</div>
+        <div class="author">
+          <div class="avatar">Д</div>
+          <div class="meta"><b>Дмитрий, СПб</b><span>Командировка · август 2025</span></div>
+        </div>
+      </article>
+      <article class="quote">
+        <div class="stars">★★★★★</div>
+        <div class="text">Оставляли велосипеды и рюкзаки на день, чтобы спокойно сходить на пляж с детьми. Всё в порядке, ребятам спасибо! Особенно понравился Wi-Fi — пока ждали, ответила на рабочие письма.</div>
+        <div class="author">
+          <div class="avatar">Е</div>
+          <div class="meta"><b>Елена с семьёй</b><span>Отдых · июнь 2025</span></div>
+        </div>
+      </article>
+    </div>
+    <div class="reviews-cta">
+      <a href="https://yandex.ru/maps/org/kamera_khraneniya_bagazha/245433262999/reviews/" target="_blank" rel="noopener" class="btn btn-ghost" data-track="click_ymaps">⭐ Все отзывы на Яндекс.Картах</a>
+      <a href="https://2gis.ru/zelenogradsk/firm/70000001101819705/tab/reviews" target="_blank" rel="noopener" class="btn btn-ghost" data-track="click_2gis">⭐ 75 отзывов на 2ГИС</a>
+    </div>
+  </div>
+</section>
+
+<section class="contacts" id="contacts">
+  <div class="wrap">
+    <h2 class="s-title">Контакты</h2>
+    <p class="s-sub">Зеленоградск, ул. Железнодорожная, 2Б корп. 1 — прямо у ж/д вокзала.</p>
     <div class="c-grid">
       <div class="c-block">
         <div class="c-item">
@@ -520,14 +640,23 @@ footer a:hover{color:var(--pink)}
           <div class="v">
             <b>Адрес</b>
             <span>г. Зеленоградск, ул. Железнодорожная, 2Б корп. 1</span>
+            <div class="sub">Калининградская область, 238530 · 1 этаж, без ступенек</div>
+          </div>
+        </div>
+        <div class="c-item">
+          <span class="ico">🚉</span>
+          <div class="v">
+            <b>Как дойти</b>
+            <span>50 м от ж/д вокзала Зеленоградска</span>
+            <div class="sub">1 минута пешком от платформы</div>
           </div>
         </div>
         <div class="c-item">
           <span class="ico">🕐</span>
           <div class="v">
-            <b>Часы работы</b>
+            <b>Режим работы</b>
             <span>Ежедневно с 09:00 до 19:00</span>
-            <span>После 19:00 — по предварительному звонку</span>
+            <div class="sub">После 19:00 — по предварительному звонку</div>
           </div>
         </div>
         <div class="c-item">
@@ -535,24 +664,17 @@ footer a:hover{color:var(--pink)}
           <div class="v">
             <b>Телефон</b>
             <a href="tel:+79969590213" data-track="click_phone">+7 (996) 959-02-13</a>
-          </div>
-        </div>
-        <div class="c-item">
-          <span class="ico">🚉</span>
-          <div class="v">
-            <b>Ориентир</b>
-            <span>50 м от ж/д вокзала Зеленоградска, 1 минута пешком</span>
+            <div class="sub">Звонки, WhatsApp, Viber на этот номер</div>
           </div>
         </div>
         <div class="c-links">
           <a href="https://t.me/Lock39_bot" target="_blank" rel="noopener" data-track="click_tg_bot">✈️ Telegram-бот</a>
           <a href="https://wa.me/79969590213" target="_blank" rel="noopener" data-track="click_whatsapp">💬 WhatsApp</a>
-          <a href="https://yandex.ru/maps/org/kamera_khraneniya_bagazha/245433262999" target="_blank" rel="noopener" data-track="click_ymaps">🗺 Яндекс.Карты</a>
-          <a href="https://2gis.ru/zelenogradsk/firm/70000001101819705" target="_blank" rel="noopener" data-track="click_2gis">🗺 2ГИС</a>
         </div>
+        <a href="https://yandex.ru/maps/?rtext=~54.958354,20.472366&rtt=auto" target="_blank" rel="noopener" class="btn btn-primary route-btn" data-track="click_ymaps">🗺 Построить маршрут</a>
       </div>
       <div class="map-block">
-        <iframe src="https://yandex.ru/map-widget/v1/?ll=20.472366%2C54.958354&z=17&pt=20.472366,54.958354,comma" loading="lazy" allowfullscreen title="Карта"></iframe>
+        <iframe src="https://yandex.ru/map-widget/v1/?ll=20.472366%2C54.958354&z=17&pt=20.472366,54.958354,pm2pnm" loading="lazy" allowfullscreen title="Карта расположения Lock·39"></iframe>
       </div>
     </div>
   </div>
@@ -565,11 +687,15 @@ footer a:hover{color:var(--pink)}
     <div class="faq">
       <div class="faq-item">
         <button class="faq-q" type="button">Где вы находитесь?<span class="chev">+</span></button>
-        <div class="faq-a"><div>Зеленоградск, ул. Железнодорожная, 2Б корп. 1 — в 50 метрах от ж/д вокзала. Без ступенек, удобно с чемоданом или коляской.</div></div>
+        <div class="faq-a"><div>Зеленоградск, ул. Железнодорожная, 2Б корп. 1 — в 50 метрах от ж/д вокзала. 1 этаж, без ступенек. Удобно с чемоданом или коляской.</div></div>
       </div>
       <div class="faq-item">
         <button class="faq-q" type="button">Сколько стоит хранение?<span class="chev">+</span></button>
         <div class="faq-a"><div>3 часа — 200 ₽. Весь день до 19:00 — 300 ₽. Суточно — 600 ₽. После 19:00 — +100 ₽ за каждый час. Тариф для велосипедов и крупногабарита — 800 ₽/день.</div></div>
+      </div>
+      <div class="faq-item">
+        <button class="faq-q" type="button">Что входит бесплатно?<span class="chev">+</span></button>
+        <div class="faq-a"><div>Wi-Fi, взвешивание багажа, использование холодильника для скоропортящихся продуктов и медикаментов, туалет, зарядка устройств и стрейч-плёнка для чемодана. Всё это — пока ваш багаж у нас.</div></div>
       </div>
       <div class="faq-item">
         <button class="faq-q" type="button">Как забронировать?<span class="chev">+</span></button>
@@ -585,11 +711,7 @@ footer a:hover{color:var(--pink)}
       </div>
       <div class="faq-item">
         <button class="faq-q" type="button">Это безопасно?<span class="chev">+</span></button>
-        <div class="faq-a"><div>Видеонаблюдение 24/7, охраняемое помещение. За всё время работы — ни одной потери. По отзывам наших гостей — это самое спокойное место в городе оставить багаж.</div></div>
-      </div>
-      <div class="faq-item">
-        <button class="faq-q" type="button">Можно ли бронировать заранее?<span class="chev">+</span></button>
-        <div class="faq-a"><div>Да, бот принимает бронирования на любую дату в ближайший месяц. Удобно для туристов, которые покупают билет за неделю-две вперёд.</div></div>
+        <div class="faq-a"><div>Видеонаблюдение 24/7, охраняемое помещение, уборка дважды в день. За всё время работы — ни одной потери. По отзывам наших гостей — это самое спокойное место в городе оставить багаж.</div></div>
       </div>
     </div>
   </div>
@@ -612,8 +734,6 @@ footer a:hover{color:var(--pink)}
   </div>
 </footer>
 
-<div id="toast" class="toast"></div>
-
 <!-- Yandex Metrika -->
 <script type="text/javascript">
 (function(m,e,t,r,i,k,a){m[i]=m[i]||function(){(m[i].a=m[i].a||[]).push(arguments)};
@@ -627,7 +747,6 @@ ym(109573035, "init", {clickmap:true,trackLinks:true,accurateTrackBounce:true,we
 
 <!-- LOCK39_ANALYTICS_INJECTED -->
 <script>
-/* Lock·39 site analytics — двойной сигнал: /api/track + Yandex Metrika reachGoal */
 (function(){
   var sent = {};
   function send(event, extras){
@@ -644,13 +763,11 @@ ym(109573035, "init", {clickmap:true,trackLinks:true,accurateTrackBounce:true,we
     } catch(e){}
   }
   function sendOnce(event){ if (sent[event]) return; sent[event] = 1; send(event); }
-  // pageview
   if (document.readyState === "complete" || document.readyState === "interactive") {
     setTimeout(function(){ sendOnce("pageview"); }, 300);
   } else {
     window.addEventListener("DOMContentLoaded", function(){ setTimeout(function(){ sendOnce("pageview"); }, 300); });
   }
-  // click tracker via data-track attribute (precise) + fallback by href pattern
   document.addEventListener("click", function(e){
     var a = e.target.closest && e.target.closest("a, button");
     if (!a) return;
@@ -668,7 +785,6 @@ ym(109573035, "init", {clickmap:true,trackLinks:true,accurateTrackBounce:true,we
     else if (/(отзыв|review)/i.test(txt)) ev = "click_review";
     if (ev) send(ev);
   }, true);
-  // scroll tracker
   var last = 0;
   function onScroll(){
     var h = document.documentElement, b = document.body;
@@ -686,7 +802,6 @@ ym(109573035, "init", {clickmap:true,trackLinks:true,accurateTrackBounce:true,we
   }, {passive:true});
 })();
 
-/* FAQ accordion */
 document.querySelectorAll('.faq-q').forEach(function(btn){
   btn.addEventListener('click', function(){
     var item = btn.parentElement;
