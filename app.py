@@ -498,6 +498,10 @@ if BOT_TOKEN:
     class ReplyFSM(StatesGroup):
         waiting_text = State()
 
+    # ──────── FSM: негативный фидбек (review gating) ────────
+    class FeedbackFSM(StatesGroup):
+        waiting_text = State()
+
     def main_menu_kb() -> ReplyKeyboardMarkup:
         """Постоянное меню с кнопками внизу экрана."""
         kb = ReplyKeyboardBuilder()
@@ -2027,6 +2031,140 @@ if BOT_TOKEN:
 
     # ──────── Отслеживание отзывов ────────
 
+    @dp.callback_query(F.data.startswith("rate:"))
+    async def cb_rate(callback: types.CallbackQuery, state: FSMContext):
+        """Развилка review gating по оценке."""
+        try:
+            _, score_str, bid = callback.data.split(":", 2)
+        except ValueError:
+            await callback.answer()
+            return
+        db = load_db()
+        booking = next((b for b in db.get("bookings", []) if b["booking_id"] == bid), None)
+        if not booking:
+            await callback.answer("Бронь не найдена", show_alert=True)
+            return
+        if booking.get("telegram_user_id") and booking["telegram_user_id"] != callback.from_user.id:
+            await callback.answer("Это чужая бронь", show_alert=True)
+            return
+        if booking.get("review_rating") is not None or booking.get("review_skipped_at"):
+            await callback.answer("Спасибо, мы уже получили вашу оценку 🙏", show_alert=True)
+            return
+
+        now_iso = datetime.datetime.now().isoformat()
+        if score_str == "skip":
+            booking["review_skipped_at"] = now_iso
+            save_db(db)
+            await callback.answer("Хорошо, спасибо!")
+            try:
+                await callback.message.edit_reply_markup(reply_markup=None)
+                await callback.message.answer("Спасибо! Будем рады видеть вас снова. 🌊")
+            except Exception:
+                pass
+            return
+
+        try:
+            score = int(score_str)
+        except ValueError:
+            await callback.answer()
+            return
+        if score < 1 or score > 5:
+            await callback.answer()
+            return
+
+        booking["review_rating"] = score
+        booking["review_rated_at"] = now_iso
+        save_db(db)
+
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+
+        username = booking.get("telegram_username")
+        user_tag = f" (@{username})" if username else ""
+        name = booking.get("name", "—")
+        phone = booking.get("phone", "—")
+
+        if score == 5:
+            await callback.answer("Спасибо за 5★! 🌟")
+            await send_positive_review_and_promo(booking)
+            await broadcast_to_admins(
+                "🌟 *5★ оценка*\n"
+                f"🆔 `{bid}`\n"
+                f"👤 {name}{user_tag}\n"
+                f"📞 {phone}"
+            )
+        else:
+            await callback.answer(f"Оценка {score}★ получена")
+            await state.set_state(FeedbackFSM.waiting_text)
+            await state.update_data(booking_id=bid, score=score)
+            await callback.message.answer(
+                "Жаль, что не на 5★. *Расскажите, что нам улучшить?*\n\n"
+                "Напишите всё, что считаете важным. Сообщение увидит только администрация — "
+                "в публичные отзывы оно *не попадёт*.\n\n"
+                "_Или /cancel — отменить._",
+                parse_mode="Markdown",
+            )
+
+    @dp.message(FeedbackFSM.waiting_text, F.text == "/cancel")
+    async def fb_cancel(message: types.Message, state: FSMContext):
+        await state.clear()
+        await message.answer("Хорошо. Если захотите поделиться позже — пишите /contact.")
+
+    @dp.message(FeedbackFSM.waiting_text, F.text & ~F.text.startswith("/"))
+    async def fb_text(message: types.Message, state: FSMContext):
+        data = await state.get_data()
+        bid = data.get("booking_id")
+        score = data.get("score", 0)
+        await state.clear()
+        if not bid:
+            await message.answer("Не нашли бронь — но спасибо за обратную связь.")
+            return
+        db = load_db()
+        booking = next((b for b in db.get("bookings", []) if b["booking_id"] == bid), None)
+        if not booking:
+            await message.answer("Бронь не найдена.")
+            return
+        text_msg = (message.text or "").strip()[:2000]
+        booking["review_feedback"] = text_msg
+        booking["review_feedback_at"] = datetime.datetime.now().isoformat()
+        save_db(db)
+
+        username = booking.get("telegram_username")
+        user_tag = f" (@{username})" if username else ""
+        name = booking.get("name", "—")
+        phone = booking.get("phone", "—")
+        stars = "⭐" * int(score)
+
+        client_uid = booking.get("telegram_user_id", 0)
+        admin_ikb = InlineKeyboardBuilder()
+        admin_ikb.row(InlineKeyboardButton(
+            text="💬 Ответить клиенту",
+            callback_data=f"reply:{client_uid}:{bid}"
+        ))
+        admin_text = (
+            f"⚠️ *Негативный отзыв ({score}★)*\n"
+            "━━━━━━━━━━━━━━\n"
+            f"🆔 `{bid}`\n"
+            f"👤 {name}{user_tag}\n"
+            f"📞 {phone}\n\n"
+            f"{stars}\n\n"
+            f"💬 _{text_msg}_"
+        )
+        for aid in ADMIN_IDS:
+            try:
+                await bot.send_message(aid, admin_text, parse_mode="Markdown", reply_markup=admin_ikb.as_markup())
+            except Exception as e:
+                print(f"[fb-admin {aid}] {e}")
+
+        await message.answer(
+            "🙏 *Спасибо за обратную связь.* Передали администрации.\n\n"
+            "Сейчас отправим небольшой бонус.",
+            parse_mode="Markdown",
+        )
+        await send_compensation_promo(booking)
+
     @dp.callback_query(F.data.startswith("rev:done:"))
     async def rev_done(callback: types.CallbackQuery):
         """Клиент подтверждает, что оставил отзыв."""
@@ -3322,52 +3460,106 @@ async def admin_notify_loop():
 
 
 async def send_review_and_promo(booking: dict):
-    """Шлёт юзеру: спасибо + просьба об отзыве + промокод."""
+    """Точка входа в review gating: сначала спросим оценку 1-5★."""
+    await send_rating_request(booking)
+
+
+async def send_rating_request(booking: dict):
+    """Шаг 1 review gating: просим клиента оценить от 1 до 5 звёзд."""
     if not bot:
         return
     user_id = booking.get("telegram_user_id")
     if not user_id:
         return
+    bid = booking["booking_id"]
+    ikb = InlineKeyboardBuilder()
+    ikb.row(
+        InlineKeyboardButton(text="⭐", callback_data=f"rate:1:{bid}"),
+        InlineKeyboardButton(text="⭐⭐", callback_data=f"rate:2:{bid}"),
+        InlineKeyboardButton(text="⭐⭐⭐", callback_data=f"rate:3:{bid}"),
+    )
+    ikb.row(
+        InlineKeyboardButton(text="⭐⭐⭐⭐", callback_data=f"rate:4:{bid}"),
+        InlineKeyboardButton(text="⭐⭐⭐⭐⭐", callback_data=f"rate:5:{bid}"),
+    )
+    ikb.row(InlineKeyboardButton(text="Пропустить", callback_data=f"rate:skip:{bid}"))
+    text = (
+        "🙏 *Спасибо, что выбрали Lock·39!*\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
+        "Нам очень важно ваше мнение — это помогает нам становиться лучше.\n\n"
+        "*Как бы вы оценили наш сервис?*"
+    )
+    try:
+        await bot.send_message(user_id, text, parse_mode="Markdown", reply_markup=ikb.as_markup())
+    except Exception as e:
+        print(f"[rating-request] {e}")
 
-    # Создаём промокод (если ещё нет)
-    promo = issue_promo_for_user(user_id, booking["booking_id"])
+
+async def send_positive_review_and_promo(booking: dict):
+    """5★: благодарим, даём промокод и ссылки на публичные карты."""
+    if not bot:
+        return
+    user_id = booking.get("telegram_user_id")
+    if not user_id:
+        return
+    bid = booking["booking_id"]
+    promo = issue_promo_for_user(user_id, bid)
+    code = promo["code"]
     try:
         expires = datetime.datetime.fromisoformat(promo["expires_at"])
         expires_str = expires.strftime("%d.%m.%Y")
     except Exception:
         expires_str = "—"
-
     ikb = InlineKeyboardBuilder()
     ikb.row(InlineKeyboardButton(text="⭐ Отзыв на Яндекс.Картах", url=REVIEW_URL_YANDEX))
     ikb.row(InlineKeyboardButton(text="⭐ Отзыв на 2ГИС", url=REVIEW_URL_2GIS))
-    ikb.row(InlineKeyboardButton(
-        text="✅ Я уже оставил отзыв",
-        callback_data=f"rev:done:{booking['booking_id']}"
-    ))
-
+    ikb.row(InlineKeyboardButton(text="✅ Я уже оставил отзыв", callback_data=f"rev:done:{bid}"))
     text = (
-        f"🙏 *Спасибо, что были с нами!*\n"
-        f"━━━━━━━━━━━━━━━━━━\n\n"
-        f"Надеемся, ваша прогулка по Зеленоградску прошла отлично, "
-        f"а багаж ждал вас в полной сохранности.\n\n"
-        f"⭐ *Ваш отзыв очень важен для нас.*\n"
-        f"Поделитесь впечатлениями — это помогает нам становиться лучше "
-        f"и помогает другим путешественникам найти нас.\n\n"
-        f"_После публикации отзыва нажмите «✅ Я уже оставил отзыв» — "
-        f"мы об этом узнаем и скажем спасибо лично._\n\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"🎁 *Подарок: ваш промокод*\n\n"
-        f"`{promo['code']}`\n\n"
-        f"💸 Скидка *10%* на следующий визит\n"
+        "🌟 *Огромное спасибо за высокую оценку!*\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
+        "Если несложно — поделитесь впечатлениями публично. "
+        "Каждый отзыв помогает другим путешественникам найти нас.\n\n"
+        "🎁 *Подарок: ваш промокод*\n\n"
+        f"`{code}`\n\n"
+        "💸 Скидка *10%* на следующий визит\n"
         f"📅 Действует до *{expires_str}*\n\n"
-        f"_Скидка применяется ко всем тарифам, кроме вечернего. "
-        f"Просто введите код при следующем бронировании._\n\n"
-        f"До новых встреч! 🌊"
+        "До новых встреч! 🌊"
     )
     try:
         await bot.send_message(user_id, text, parse_mode="Markdown", reply_markup=ikb.as_markup())
     except Exception as e:
-        print(f"[review-msg] {e}")
+        print(f"[positive-review] {e}")
+
+
+async def send_compensation_promo(booking: dict):
+    """≤4★ после фидбека: даём промокод как компенсацию."""
+    if not bot:
+        return
+    user_id = booking.get("telegram_user_id")
+    if not user_id:
+        return
+    bid = booking["booking_id"]
+    promo = issue_promo_for_user(user_id, bid)
+    code = promo["code"]
+    try:
+        expires = datetime.datetime.fromisoformat(promo["expires_at"])
+        expires_str = expires.strftime("%d.%m.%Y")
+    except Exception:
+        expires_str = "—"
+    text = (
+        "🙏 *Спасибо за честную обратную связь.*\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
+        "Мы передали ваши слова администрации — они помогут нам исправить ситуацию.\n\n"
+        "Как компенсация за неудобство — ваш промокод:\n\n"
+        f"`{code}`\n\n"
+        "💸 Скидка *10%* на следующий визит\n"
+        f"📅 Действует до *{expires_str}*\n\n"
+        "_Если захотите рассказать подробнее — напишите /contact._"
+    )
+    try:
+        await bot.send_message(user_id, text, parse_mode="Markdown")
+    except Exception as e:
+        print(f"[compensation] {e}")
 
 
 # ─────────── API ───────────
