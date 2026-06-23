@@ -402,6 +402,89 @@ footer a:hover{color:var(--pink)}
   .bonus h3{padding-right:70px}
   .c-block,.map-block{min-height:auto}
 }
+
+
+/* ============ ИЗМЕНЕНИЯ v3: sticky CTA + наличие + калькулятор ============ */
+
+/* Availability pill в hero */
+.avail-pill{
+  display:inline-flex;align-items:center;gap:6px;
+  background:#fff;border:1px solid var(--line);padding:7px 14px;border-radius:999px;
+  font-size:13px;font-weight:700;color:var(--ink);margin-left:6px;
+  vertical-align:middle;transition:all .3s;
+}
+.avail-pill .led{
+  width:8px;height:8px;border-radius:50%;background:#2ecc71;
+  box-shadow:0 0 0 0 rgba(46,204,113,.7);animation:pulse 2s infinite;
+}
+.avail-pill.warn .led{background:#f39c12;box-shadow:0 0 0 0 rgba(243,156,18,.7)}
+.avail-pill.warn{border-color:#f39c12;color:#a85a00}
+.avail-pill.crit .led{background:#e74c3c;box-shadow:0 0 0 0 rgba(231,76,60,.7)}
+.avail-pill.crit{border-color:#e74c3c;color:#b03124}
+.avail-pill.hidden{opacity:0;transform:translateY(-6px)}
+@keyframes pulse{
+  0%{box-shadow:0 0 0 0 rgba(46,204,113,.7)}
+  70%{box-shadow:0 0 0 10px rgba(46,204,113,0)}
+  100%{box-shadow:0 0 0 0 rgba(46,204,113,0)}
+}
+
+/* Калькулятор в hero */
+.calc{
+  max-width:560px;margin:30px auto 0;background:#fff;border:2px solid var(--line);
+  border-radius:24px;padding:22px 20px;box-shadow:var(--shadow-lg);text-align:left;
+}
+.calc-title{
+  font-size:13px;font-weight:800;letter-spacing:.5px;text-transform:uppercase;
+  color:var(--muted);text-align:center;margin-bottom:14px;
+}
+.calc-label{font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;display:block}
+.calc-tariffs{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:16px}
+.calc-tariffs button{
+  flex:1;min-width:calc(50% - 3px);padding:11px 8px;border:1.5px solid var(--line);
+  border-radius:12px;background:#fff;font-size:13px;font-weight:700;color:var(--ink);
+  transition:all .15s;line-height:1.2;
+}
+.calc-tariffs button:hover{border-color:var(--pink)}
+.calc-tariffs button.active{background:var(--grad);color:#fff;border-color:transparent;box-shadow:0 4px 14px rgba(255,61,138,.3)}
+.calc-tariffs button .tarif-price{display:block;font-size:11px;font-weight:600;opacity:.85;margin-top:3px}
+.calc-row{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-bottom:18px;padding:14px;background:var(--grad-soft);border-radius:14px}
+.calc-row .lbl{font-size:14px;font-weight:700;color:var(--ink)}
+.calc-counter{display:flex;align-items:center;gap:10px}
+.calc-counter button{
+  width:36px;height:36px;border-radius:50%;background:#fff;border:1.5px solid var(--line);
+  font-size:18px;font-weight:800;color:var(--ink);display:flex;align-items:center;justify-content:center;
+  transition:all .15s;
+}
+.calc-counter button:hover:not(:disabled){border-color:var(--pink);color:var(--pink)}
+.calc-counter button:disabled{opacity:.35;cursor:not-allowed}
+.calc-counter .val{font-size:20px;font-weight:800;min-width:30px;text-align:center}
+.calc-total{
+  display:flex;align-items:baseline;justify-content:space-between;gap:10px;
+  padding:14px 16px;background:var(--ink);border-radius:14px;color:#fff;margin-bottom:14px;
+}
+.calc-total .lbl{font-size:13px;font-weight:600;opacity:.85;letter-spacing:.3px}
+.calc-total .sum{font-size:28px;font-weight:800;letter-spacing:-.5px}
+.calc-total .sum span{font-size:14px;opacity:.7;font-weight:600;margin-left:2px}
+.calc-cta{display:block;text-align:center;width:100%;padding:16px;background:var(--grad);color:#fff;border-radius:14px;font-weight:700;font-size:16px;box-shadow:0 6px 20px rgba(255,61,138,.35);transition:transform .15s,box-shadow .2s}
+.calc-cta:hover{transform:translateY(-2px);box-shadow:0 8px 24px rgba(255,61,138,.45)}
+
+/* Sticky CTA на мобильных */
+.sticky-cta{
+  position:fixed;left:0;right:0;bottom:0;z-index:60;
+  padding:10px 16px calc(10px + env(safe-area-inset-bottom));
+  background:rgba(255,252,247,.96);
+  backdrop-filter:saturate(180%) blur(14px);
+  -webkit-backdrop-filter:saturate(180%) blur(14px);
+  border-top:1px solid var(--line);
+  transform:translateY(110%);transition:transform .3s ease;
+  display:none;
+}
+.sticky-cta.show{transform:translateY(0)}
+.sticky-cta .btn{width:100%;font-size:15px;min-height:48px}
+@media(max-width:679px){
+  .sticky-cta{display:block}
+  body{padding-bottom:90px}
+}
 </style>
 </head>
 <body>
@@ -423,7 +506,7 @@ footer a:hover{color:var(--pink)}
 
 <section class="hero">
   <div class="wrap">
-    <span class="eyebrow">⭐ 5.0 · 90+ отзывов на картах</span>
+    <span class="eyebrow">⭐ 5.0 · 90+ отзывов на картах</span><span class="avail-pill hidden" id="availPill"><span class="led"></span><span id="availText">проверяем места…</span></span>
     <h1>Камера хранения багажа<br><span class="grad">в Зеленоградске</span></h1>
     <p class="lead">Первая туристическая камера хранения у самого вокзала.<br>Сдайте чемодан за минуту — гуляйте налегке.</p>
     <div class="hero-utp">
@@ -441,6 +524,30 @@ footer a:hover{color:var(--pink)}
       <div class="meta-card"><div class="num">от 200 ₽</div><div class="lbl">за 3 часа</div></div>
       <div class="meta-card"><div class="num">24/7</div><div class="lbl">видеонаблюдение</div></div>
       <div class="meta-card"><div class="num">1 мин</div><div class="lbl">занимает бронь</div></div>
+    </div>
+
+    <div class="calc" id="calc">
+      <div class="calc-title">💰 Калькулятор стоимости</div>
+      <span class="calc-label">Выберите тариф</span>
+      <div class="calc-tariffs" id="calcTariffs">
+        <button type="button" data-price="200" data-name="3 часа" class="active">3 часа<span class="tarif-price">200 ₽</span></button>
+        <button type="button" data-price="300" data-name="Весь день">Весь день<span class="tarif-price">300 ₽</span></button>
+        <button type="button" data-price="600" data-name="Суточный">Суточный<span class="tarif-price">600 ₽</span></button>
+        <button type="button" data-price="800" data-name="Велочемодан">Велочемодан<span class="tarif-price">800 ₽</span></button>
+      </div>
+      <div class="calc-row">
+        <div class="lbl">Количество мест</div>
+        <div class="calc-counter">
+          <button type="button" id="calcMinus" aria-label="Меньше">−</button>
+          <div class="val" id="calcQty">1</div>
+          <button type="button" id="calcPlus" aria-label="Больше">+</button>
+        </div>
+      </div>
+      <div class="calc-total">
+        <div class="lbl">Итого</div>
+        <div class="sum"><span id="calcSumDetail">200 ₽ × 1</span> = <b id="calcSum">200</b> <span>₽</span></div>
+      </div>
+      <a href="https://t.me/Lock39_bot" class="calc-cta" data-track="click_book" id="calcCta">📅 Забронировать в боте</a>
     </div>
   </div>
 </section>
@@ -750,6 +857,11 @@ footer a:hover{color:var(--pink)}
   </div>
 </footer>
 
+<div class="sticky-cta" id="stickyCta">
+  <a href="https://t.me/Lock39_bot" class="btn btn-primary" data-track="click_book">📅 Забронировать в боте</a>
+</div>
+
+
 <!-- Yandex Metrika -->
 <script type="text/javascript">
 (function(m,e,t,r,i,k,a){m[i]=m[i]||function(){(m[i].a=m[i].a||[]).push(arguments)};
@@ -817,6 +929,92 @@ ym(109573035, "init", {clickmap:true,trackLinks:true,accurateTrackBounce:true,we
     if (window.requestAnimationFrame) requestAnimationFrame(onScroll); else onScroll();
   }, {passive:true});
 })();
+
+
+/* ============ v3: калькулятор + наличие + sticky ============ */
+(function(){
+  // -- Калькулятор --
+  var tBtns = document.querySelectorAll('#calcTariffs button');
+  var qtyEl = document.getElementById('calcQty');
+  var minus = document.getElementById('calcMinus');
+  var plus = document.getElementById('calcPlus');
+  var sumEl = document.getElementById('calcSum');
+  var sumDetail = document.getElementById('calcSumDetail');
+  var cta = document.getElementById('calcCta');
+  if (!tBtns.length || !qtyEl) return;
+  var state = { price: 200, name: '3 часа', qty: 1 };
+  function recalc(){
+    var total = state.price * state.qty;
+    qtyEl.textContent = state.qty;
+    sumEl.textContent = total;
+    sumDetail.textContent = state.price + ' ₽ × ' + state.qty;
+    cta.textContent = '📅 Забронировать за ' + total + ' ₽';
+    minus.disabled = state.qty <= 1;
+    plus.disabled = state.qty >= 10;
+  }
+  tBtns.forEach(function(b){
+    b.addEventListener('click', function(){
+      tBtns.forEach(function(x){x.classList.remove('active')});
+      b.classList.add('active');
+      state.price = parseInt(b.dataset.price, 10);
+      state.name = b.dataset.name;
+      recalc();
+    });
+  });
+  minus.addEventListener('click', function(){ if (state.qty > 1) { state.qty--; recalc(); } });
+  plus.addEventListener('click', function(){ if (state.qty < 10) { state.qty++; recalc(); } });
+  recalc();
+})();
+
+(function(){
+  // -- Виджет наличия мест --
+  var pill = document.getElementById('availPill');
+  var text = document.getElementById('availText');
+  if (!pill || !text) return;
+  function load(){
+    fetch('/api/availability', {cache:'no-store'})
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        var free = (typeof d.free === 'number') ? d.free : null;
+        var total = (typeof d.total === 'number') ? d.total : null;
+        if (free === null || total === null) { pill.classList.add('hidden'); return; }
+        pill.classList.remove('hidden','warn','crit');
+        if (free === 0) {
+          pill.classList.add('crit');
+          text.textContent = 'Сейчас занято — звоните';
+        } else if (free <= 3) {
+          pill.classList.add('crit');
+          text.textContent = 'Осталось ' + free + ' из ' + total + ' мест';
+        } else if (free <= 8) {
+          pill.classList.add('warn');
+          text.textContent = 'Свободно ' + free + ' из ' + total + ' мест';
+        } else {
+          text.textContent = 'Свободно ' + free + ' из ' + total + ' мест';
+        }
+      })
+      .catch(function(){ pill.classList.add('hidden'); });
+  }
+  load();
+  setInterval(load, 60000);
+})();
+
+(function(){
+  // -- Sticky CTA: показываем после прокрутки 1 экрана --
+  var sc = document.getElementById('stickyCta');
+  if (!sc) return;
+  var shown = false;
+  function onScroll(){
+    var sh = window.innerHeight || 600;
+    var st = window.scrollY || document.documentElement.scrollTop;
+    if (st > sh * 0.6 && !shown) { sc.classList.add('show'); shown = true; }
+    else if (st <= sh * 0.4 && shown) { sc.classList.remove('show'); shown = false; }
+  }
+  window.addEventListener('scroll', function(){
+    if (window.requestAnimationFrame) requestAnimationFrame(onScroll); else onScroll();
+  }, {passive:true});
+  onScroll();
+})();
+
 
 document.querySelectorAll('.faq-q').forEach(function(btn){
   btn.addEventListener('click', function(){
