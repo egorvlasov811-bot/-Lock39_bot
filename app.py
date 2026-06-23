@@ -40,7 +40,7 @@ SITE_STATS_FILE = "site_stats.json"
 SITE_STATS_RETENTION_DAYS = 90
 SITE_STATS_MAX_EVENTS = 50000
 TRACK_SALT = os.getenv("TRACK_SALT", "lock39-anonymize-salt-change-me")
-TOTAL_PLACES = 500
+TOTAL_PLACES = 200
 
 
 # ─────────── АДМИНЫ ───────────
