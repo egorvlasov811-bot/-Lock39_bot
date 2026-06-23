@@ -316,7 +316,7 @@ section.s{padding:60px 0}
 /* CONTACTS */
 .contacts{position:relative;padding:72px 0;background:linear-gradient(180deg,#fff 0%,var(--grad-soft) 100%);border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
 .c-grid{display:grid;gap:24px;grid-template-columns:1fr;align-items:stretch}
-@media(min-width:880px){.c-grid{grid-template-columns:1fr 1.2fr;gap:32px}}
+@media(min-width:880px){.c-grid{grid-template-columns:380px 1fr;gap:32px}}
 .c-block{
   background:#fff;border-radius:var(--r);padding:28px;border:2px solid var(--pink);
   box-shadow:var(--shadow-lg);display:flex;flex-direction:column;
@@ -342,11 +342,30 @@ section.s{padding:60px 0}
 .c-links a:hover{border-color:var(--pink);color:var(--pink);transform:translateY(-2px)}
 .route-btn{margin-top:18px;width:100%}
 .map-block{
-  border-radius:var(--r);overflow:hidden;border:2px solid var(--line);
-  min-height:380px;display:flex;flex-direction:column;background:#fff;
-  box-shadow:var(--shadow);
+  position:relative;border-radius:var(--r);overflow:hidden;border:2px solid var(--line);
+  min-height:560px;background:#f5f5f5;box-shadow:var(--shadow);
 }
-.map-block iframe{flex:1;min-height:380px;border:0;width:100%;display:block}
+#ymap{width:100%;height:100%;min-height:560px}
+.map-loading{
+  position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  background:var(--grad-soft);color:var(--muted);font-size:14px;z-index:1;pointer-events:none;
+  transition:opacity .3s ease;
+}
+.map-loading.hide{opacity:0}
+.map-pin-overlay{
+  position:absolute;top:14px;left:14px;z-index:2;
+  background:#fff;border-radius:14px;padding:10px 14px;
+  box-shadow:0 4px 16px rgba(0,0,0,.12);
+  display:flex;align-items:center;gap:10px;max-width:calc(100% - 28px);
+  pointer-events:none;
+}
+.map-pin-overlay .badge{
+  width:32px;height:32px;border-radius:50%;background:var(--grad);
+  display:flex;align-items:center;justify-content:center;color:#fff;
+  font-weight:800;font-size:13px;letter-spacing:-.5px;flex-shrink:0;
+}
+.map-pin-overlay .ti{font-size:13px;font-weight:700;line-height:1.2}
+.map-pin-overlay .ti span{display:block;font-weight:500;color:var(--muted);font-size:12px;margin-top:2px}
 
 /* FAQ */
 .faq{max-width:780px;margin:0 auto}
@@ -666,7 +685,12 @@ footer a:hover{color:var(--pink)}
         <a href="https://yandex.ru/maps/?rtext=~54.958354,20.472366&rtt=auto" target="_blank" rel="noopener" class="btn btn-primary route-btn" data-track="click_ymaps">🗺 Построить маршрут</a>
       </div>
       <div class="map-block">
-        <iframe src="https://yandex.ru/map-widget/v1/?ll=20.472366%2C54.958354&z=17&pt=20.472366,54.958354,pm2pnm" loading="lazy" allowfullscreen title="Карта расположения Lock·39"></iframe>
+        <div class="map-pin-overlay">
+          <div class="badge">L·39</div>
+          <div class="ti">Lock·39<span>ул. Железнодорожная, 2Б к.1</span></div>
+        </div>
+        <div class="map-loading" id="mapLoading">Загружаем карту…</div>
+        <div id="ymap"></div>
       </div>
     </div>
   </div>
@@ -801,6 +825,62 @@ document.querySelectorAll('.faq-q').forEach(function(btn){
     document.querySelectorAll('.faq-item.open').forEach(function(x){x.classList.remove('open')});
     if (!open) item.classList.add('open');
   });
+});
+</script>
+
+
+<!-- Yandex Maps JS API for custom branded placemark -->
+<script src="https://api-maps.yandex.ru/2.1/?lang=ru_RU" defer></script>
+<script>
+window.addEventListener('load', function(){
+  function initLockMap(){
+    if (!window.ymaps || !ymaps.ready) { setTimeout(initLockMap, 200); return; }
+    ymaps.ready(function () {
+      try {
+        var center = [54.958354, 20.472366];
+        var map = new ymaps.Map('ymap', {
+          center: center,
+          zoom: 16,
+          controls: ['zoomControl','rulerControl','trafficControl','typeSelector']
+        }, { suppressMapOpenBlock: true });
+        // Кастомная SVG-метка в стиле Lock·39 (розово-жёлтый градиент)
+        var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="72" height="92" viewBox="0 0 72 92">' +
+          '<defs><linearGradient id="g39" x1="0" y1="0" x2="1" y2="1">' +
+          '<stop offset="0%" stop-color="#FF3D8A"/>' +
+          '<stop offset="100%" stop-color="#FFA500"/>' +
+          '</linearGradient>' +
+          '<filter id="s39" x="-20%" y="-10%" width="140%" height="140%">' +
+          '<feDropShadow dx="0" dy="3" stdDeviation="3" flood-opacity="0.35"/>' +
+          '</filter></defs>' +
+          '<ellipse cx="36" cy="86" rx="12" ry="3" fill="rgba(0,0,0,.2)"/>' +
+          '<path filter="url(#s39)" d="M36 2 C18 2 6 16 6 34 C6 53 26 72 36 86 C46 72 66 53 66 34 C66 16 54 2 36 2Z" fill="url(#g39)" stroke="#ffffff" stroke-width="3"/>' +
+          '<text x="36" y="42" text-anchor="middle" fill="white" font-size="18" font-weight="800" font-family="-apple-system,Segoe UI,Roboto,sans-serif" letter-spacing="-0.5">L·39</text>' +
+          '</svg>';
+        var iconHref = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+        var placemark = new ymaps.Placemark(center, {
+          balloonContentHeader: '<b>Lock·39</b>',
+          balloonContentBody: 'Камера хранения багажа<br>ул. Железнодорожная, 2Б к.1<br>50 м от ж/д вокзала',
+          balloonContentFooter: '<a href="https://yandex.ru/maps/?rtext=~54.958354,20.472366&rtt=auto" target="_blank" rel="noopener" style="color:#FF3D8A;font-weight:600">Построить маршрут →</a>',
+          hintContent: 'Lock·39 — камера хранения'
+        }, {
+          iconLayout: 'default#image',
+          iconImageHref: iconHref,
+          iconImageSize: [72, 92],
+          iconImageOffset: [-36, -86]
+        });
+        map.geoObjects.add(placemark);
+        map.behaviors.disable('scrollZoom');
+        // Скрываем placeholder когда карта готова
+        var l = document.getElementById('mapLoading');
+        if (l) { l.classList.add('hide'); setTimeout(function(){ l.style.display='none'; }, 400); }
+      } catch (e) {
+        console.warn('[map] init failed', e);
+        var l = document.getElementById('mapLoading');
+        if (l) l.innerHTML = 'Не удалось загрузить карту. <a href="https://yandex.ru/maps/?ll=20.472366,54.958354&z=16" target="_blank" rel="noopener" style="color:#FF3D8A;font-weight:600;text-decoration:underline">Открыть в Яндекс.Картах</a>';
+      }
+    });
+  }
+  initLockMap();
 });
 </script>
 
