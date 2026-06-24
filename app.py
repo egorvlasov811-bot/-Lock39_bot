@@ -2252,6 +2252,22 @@ if BOT_TOKEN:
         )
         await message.answer(text, parse_mode="Markdown")
 
+    @dp.message(Command("privacy"))
+    async def cmd_privacy(message: types.Message):
+        await message.answer(
+            "🔒 *Политика конфиденциальности Lock·39*\n"
+            "━━━━━━━━━━━━━━━━━━\n\n"
+            "Мы собираем только имя, телефон и Telegram-данные — для оказания услуги хранения багажа. "
+            "Никому ничего не продаём, не передаём третьим лицам без вашего согласия, "
+            "удаляем данные через 3 года после последней брони.\n\n"
+            "Полный текст: https://lock39.ru/privacy\n\n"
+            "*Оператор:* ИП Власов Е.В.\n"
+            "*Контакт:* +7 (996) 959-02-13",
+            parse_mode="Markdown",
+            disable_web_page_preview=True,
+        )
+
+
     @dp.message(Command("help"))
     async def cmd_help(message: types.Message):
         await message.answer(
@@ -3202,6 +3218,7 @@ async def set_bot_commands():
         BotCommand(command="cancel", description="❌ Отменить активную бронь"),
         BotCommand(command="contact", description="📞 Связаться с администрацией"),
         BotCommand(command="help", description="ℹ️ Помощь и список команд"),
+        BotCommand(command="privacy", description="🔒 Политика конфиденциальности"),
     ]
     admin_commands = base_commands + [
         BotCommand(command="admin",      description="🔧 Админ-панель и сводка"),
@@ -3646,6 +3663,16 @@ def root():
 
 
 SITE_URL = "https://lock39.ru"
+
+
+@app.get("/privacy", response_class=HTMLResponse)
+async def privacy_page():
+    """Политика конфиденциальности (152-ФЗ)."""
+    path = Path("privacy.html")
+    if path.exists():
+        with open(path, "r", encoding="utf-8") as f:
+            return HTMLResponse(content=f.read())
+    return HTMLResponse(content="<h1>Политика конфиденциальности временно недоступна</h1>", status_code=503)
 
 
 @app.get("/robots.txt", response_class=PlainTextResponse)
