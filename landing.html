@@ -508,6 +508,45 @@ footer a:hover{color:var(--pink)}
   .cookie-banner{bottom:90px;font-size:12px}
   .cookie-banner .ck-text{font-size:12px}
 }
+
+
+/* Inline privacy policy */
+.privacy-section{padding:48px 0 24px;border-top:1px solid var(--line);background:#fff}
+.privacy-collapse{
+  max-width:840px;margin:0 auto;border:1px solid var(--line);border-radius:var(--r);
+  background:#fff;overflow:hidden;
+}
+.privacy-collapse summary{
+  list-style:none;cursor:pointer;padding:20px 22px;
+  display:flex;align-items:center;justify-content:space-between;gap:12px;
+  font-size:18px;font-weight:700;color:var(--ink);
+  background:var(--grad-soft);transition:background .2s;
+}
+.privacy-collapse summary::-webkit-details-marker{display:none}
+.privacy-collapse summary::after{
+  content:"+";font-size:24px;color:var(--pink);font-weight:800;
+  transition:transform .25s;flex-shrink:0;
+}
+.privacy-collapse[open] summary::after{transform:rotate(45deg)}
+.privacy-collapse summary:hover{background:#fff5f8}
+.privacy-content{padding:24px 26px 28px;font-size:14.5px;line-height:1.65;color:var(--ink)}
+.privacy-content h3{font-size:16px;font-weight:800;margin:18px 0 8px;color:var(--ink)}
+.privacy-content h3:first-child{margin-top:0}
+.privacy-content p{margin-bottom:10px;color:var(--muted)}
+.privacy-content ul{padding-left:22px;margin-bottom:10px}
+.privacy-content ul li{color:var(--muted);margin-bottom:4px;font-size:14.5px}
+.privacy-content ul li::marker{color:var(--pink)}
+.privacy-content a{color:var(--pink);font-weight:600}
+.privacy-content .full-link{
+  display:inline-block;margin-top:14px;padding:10px 18px;border-radius:999px;
+  background:var(--grad);color:#fff;font-weight:700;font-size:14px;
+}
+.privacy-content .full-link:hover{transform:translateY(-1px);box-shadow:var(--shadow)}
+.privacy-content hr{border:0;border-top:1px solid var(--line);margin:18px 0}
+@media(max-width:480px){
+  .privacy-collapse summary{padding:16px 18px;font-size:16px}
+  .privacy-content{padding:18px 18px 20px;font-size:14px}
+}
 </style>
 </head>
 <body>
@@ -876,6 +915,101 @@ footer a:hover{color:var(--pink)}
     <a href="https://t.me/Lock39_bot" class="btn btn-primary" data-track="click_book">📅 Открыть бот @Lock39_bot</a>
   </div>
 </div>
+
+
+<section class="privacy-section" id="privacy-inline">
+  <div class="wrap">
+    <details class="privacy-collapse">
+      <summary>🔒 Политика конфиденциальности</summary>
+      <div class="privacy-content">
+
+        <h3>1. Общие положения</h3>
+        <p>Настоящая Политика определяет порядок обработки персональных данных пользователей сайта <a href="https://lock39.ru">lock39.ru</a> и Telegram-бота <a href="https://t.me/Lock39_bot">@Lock39_bot</a>. Используя сайт или бот, вы подтверждаете согласие с условиями настоящей Политики.</p>
+        <p>Политика разработана в соответствии с Федеральным законом № 152-ФЗ «О персональных данных».</p>
+
+        <h3>2. Оператор персональных данных</h3>
+        <p><b>Индивидуальный предприниматель Власов Егор Викторович</b><br>
+        Адрес: 238530, Калининградская область, г. Зеленоградск, ул. Железнодорожная, 2Б корп. 1<br>
+        Телефон: <a href="tel:+79969590213">+7 (996) 959-02-13</a><br>
+        Telegram-бот: <a href="https://t.me/Lock39_bot">@Lock39_bot</a></p>
+
+        <h3>3. Какие данные мы собираем</h3>
+        <ul>
+          <li>Имя (при оформлении бронирования)</li>
+          <li>Номер телефона</li>
+          <li>Идентификатор Telegram (user_id, username)</li>
+          <li>Информацию о бронировании (даты, тариф, количество мест)</li>
+          <li>Технические данные: IP-адрес, тип браузера, файлы cookie</li>
+          <li>Сведения о посещении сайта через Яндекс.Метрику</li>
+        </ul>
+        <p>Мы <b>не собираем</b> специальные категории данных (раса, политические взгляды, здоровье, биометрию).</p>
+
+        <h3>4. Цели обработки персональных данных</h3>
+        <ul>
+          <li>Оказание услуги краткосрочного хранения багажа</li>
+          <li>Бронирование, изменение и отмена бронирования</li>
+          <li>Информирование о статусе брони</li>
+          <li>Связь с пользователем по вопросам услуги</li>
+          <li>Обработка обращений, претензий, отзывов</li>
+          <li>Учёт и улучшение качества обслуживания</li>
+          <li>Информирование о специальных предложениях (при наличии согласия)</li>
+        </ul>
+
+        <h3>5. Правовые основания обработки</h3>
+        <ul>
+          <li>Согласие пользователя, выраженное при использовании сервиса (ст. 6 ч. 1 п. 1 152-ФЗ)</li>
+          <li>Заключение и исполнение договора оказания услуг (ст. 6 ч. 1 п. 5 152-ФЗ)</li>
+          <li>Выполнение требований законодательства РФ</li>
+        </ul>
+
+        <h3>6. Порядок и условия обработки</h3>
+        <p><b>Способы:</b> автоматизированная и неавтоматизированная обработка.</p>
+        <p><b>Меры безопасности:</b> защищённое соединение HTTPS (TLS 1.2/1.3), доступ к серверу по SSH-ключам, хеширование IP-адресов в системе аналитики (SHA-256), резервное копирование, журналирование действий администраторов, ограничение круга лиц с доступом к данным.</p>
+
+        <h3>7. Передача данных третьим лицам</h3>
+        <p>Оператор <b>не продаёт</b> и <b>не передаёт</b> персональные данные третьим лицам, за исключением случаев:</p>
+        <ul>
+          <li>Использование сервиса Telegram (для работы бота)</li>
+          <li>Использование сервиса Яндекс.Метрика для аналитики (обезличенные данные)</li>
+          <li>Передача по требованию государственных органов в случаях, предусмотренных законом</li>
+        </ul>
+
+        <h3>8. Срок хранения данных</h3>
+        <ul>
+          <li>Активные клиенты — на весь период использования сервиса</li>
+          <li>После последней брони — <b>3 года</b>, затем данные удаляются или обезличиваются</li>
+          <li>Cookies и аналитические данные — 90 дней</li>
+          <li>Записи Яндекс.Метрика Вебвизора — согласно правилам Яндекса (15 дней)</li>
+        </ul>
+
+        <h3>9. Ваши права</h3>
+        <p>Пользователь имеет право:</p>
+        <ul>
+          <li>Получить информацию об обрабатываемых данных</li>
+          <li>Требовать уточнения, блокирования или уничтожения данных</li>
+          <li>Отозвать согласие на обработку в любой момент</li>
+          <li>Обжаловать действия оператора в Роскомнадзоре или в суде</li>
+        </ul>
+        <p>Запросы направляйте по телефону <a href="tel:+79969590213">+7 (996) 959-02-13</a> или в Telegram-бот <a href="https://t.me/Lock39_bot">@Lock39_bot</a>.</p>
+
+        <h3>10. Файлы cookie</h3>
+        <p>Сайт использует файлы cookie для корректной работы и сбора статистики (Яндекс.Метрика). Пользователь может отключить cookies в настройках браузера — в этом случае часть функций сайта может быть недоступна.</p>
+
+        <h3>11. Изменение Политики</h3>
+        <p>Оператор вправе изменять Политику в одностороннем порядке. Актуальная версия всегда размещена на странице <a href="https://lock39.ru/privacy">lock39.ru/privacy</a>. Продолжение использования сервиса означает согласие с обновлённой версией.</p>
+
+        <h3>12. Контакты</h3>
+        <p>По вопросам обработки персональных данных:<br>
+        ИП Власов Е.В., 238530, г. Зеленоградск, ул. Железнодорожная, 2Б корп. 1<br>
+        Телефон: <a href="tel:+79969590213">+7 (996) 959-02-13</a><br>
+        Telegram: <a href="https://t.me/Lock39_bot">@Lock39_bot</a></p>
+
+        <hr>
+        <a href="/privacy" class="full-link">Открыть полную версию →</a>
+      </div>
+    </details>
+  </div>
+</section>
 
 <footer>
   <div class="wrap">
