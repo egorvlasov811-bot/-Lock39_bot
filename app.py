@@ -3166,7 +3166,7 @@ async def send_user_confirmation(booking: dict):
 async def broadcast_to_admins(text: str, reply_markup=None, parse_mode: str = "Markdown",
                               only_main: bool = False):
     """Шлёт сообщение всем админам (или только главному).
-    Возвращает количество успешно доставленных сообщений."""
+    При ошибке Markdown-парсинга — повторяет без форматирования."""
     if not bot:
         return 0
     targets = {MAIN_ADMIN_ID} if only_main else set(ADMIN_IDS)
@@ -3178,26 +3178,52 @@ async def broadcast_to_admins(text: str, reply_markup=None, parse_mode: str = "M
                                    parse_mode=parse_mode, reply_markup=reply_markup)
             sent += 1
         except Exception as e:
-            print(f"[broadcast_admins {aid}] {e}")
+            msg = str(e).lower()
+            # Fallback: если Telegram не смог распарсить Markdown — шлём plain text
+            if "parse entities" in msg or "can't parse" in msg or "can not parse" in msg:
+                try:
+                    await bot.send_message(chat_id=aid, text=text,
+                                           parse_mode=None, reply_markup=reply_markup)
+                    sent += 1
+                    print(f"[broadcast_admins {aid}] fallback to plain text OK")
+                except Exception as e2:
+                    print(f"[broadcast_admins {aid}] fallback failed: {e2}")
+            else:
+                print(f"[broadcast_admins {aid}] {e}")
     return sent
 
 
+def _esc_md(text) -> str:
+    """Экранируем спецсимволы Telegram-Markdown (legacy) для пользовательских значений."""
+    if text is None:
+        return "—"
+    t = str(text)
+    # Markdown legacy: *, _, `, [
+    for ch in ("*", "_", "`", "["):
+        t = t.replace(ch, "\\" + ch)
+    return t
+
+
 async def notify_admin(booking: dict):
-    """Уведомление о новой брони — всем админам."""
+    """Уведомление о новой брони — всем админам. Экранирует пользовательские поля."""
     if not bot or not ADMIN_IDS:
         return
-    user_info = f" (@{booking['telegram_username']})" if booking.get("telegram_username") else ""
+    name = _esc_md(booking.get("name", "—"))
+    phone = _esc_md(booking.get("phone", "—"))
+    tariff = _esc_md(booking.get("tariff", "—"))
+    username_raw = booking.get("telegram_username")
+    user_info = f" (@{_esc_md(username_raw)})" if username_raw else ""
     msg = (
         f"🔔 *Новое бронирование!*\n"
         f"━━━━━━━━━━━━━━\n"
         f"🆔 `{booking['booking_id']}`\n"
         f"📦 Место: *№{booking.get('place_num','—')}*\n"
-        f"💰 Тариф: {booking['tariff']}\n"
+        f"💰 Тариф: {tariff}\n"
         f"📅 Дата: {fmt_date_ru(booking['date'])}\n"
         f"⏰ Время: {booking.get('time') or '—'}\n"
         f"🎒 Вещей: {booking['items']} шт\n"
-        f"👤 Имя: {booking['name']}{user_info}\n"
-        f"📞 Тел.: {booking['phone']}\n"
+        f"👤 Имя: {name}{user_info}\n"
+        f"📞 Тел.: {phone}\n"
         f"💵 Итого: *{booking['total']:,} ₽*"
     )
     await broadcast_to_admins(msg)
