@@ -605,6 +605,14 @@ footer a:hover{color:var(--pink)}
           <button type="button" id="calcPlus" aria-label="Больше">+</button>
         </div>
       </div>
+      <div class="calc-row">
+        <div class="lbl">Часы после 19:00 <span style="font-weight:500;color:var(--muted);font-size:12px;display:block;margin-top:2px">+100 ₽/час за место</span></div>
+        <div class="calc-counter">
+          <button type="button" id="calcEveMinus" aria-label="Меньше">−</button>
+          <div class="val" id="calcEve">0</div>
+          <button type="button" id="calcEvePlus" aria-label="Больше">+</button>
+        </div>
+      </div>
       <div class="calc-total">
         <div class="lbl">Итого</div>
         <div class="sum"><span id="calcSumDetail">200 ₽ × 1</span> = <b id="calcSum">200</b> <span>₽</span></div>
@@ -1106,16 +1114,32 @@ ym(109573035, "init", {clickmap:true,trackLinks:true,accurateTrackBounce:true,we
   var sumDetail = document.getElementById('calcSumDetail');
   var cta = document.getElementById('calcCta');
   if (!tBtns.length || !qtyEl) return;
-  var state = { price: 200, name: '3 часа', qty: 1 };
+  var eveEl = document.getElementById('calcEve');
+  var eveMinus = document.getElementById('calcEveMinus');
+  var evePlus = document.getElementById('calcEvePlus');
+  var state = { price: 200, name: '3 часа', qty: 1, eve: 0 };
+  var EVE_RATE = 100;
+  var EVE_MAX = 6;
   function recalc(){
-    var total = state.price * state.qty;
+    var base = state.price * state.qty;
+    var evening = EVE_RATE * state.eve * state.qty;
+    var total = base + evening;
     qtyEl.textContent = state.qty;
+    eveEl.textContent = state.eve;
     sumEl.textContent = total;
-    sumDetail.textContent = state.price + ' ₽ × ' + state.qty;
+    if (state.eve > 0) {
+      sumDetail.textContent = state.price + ' ₽ × ' + state.qty + ' + ' + EVE_RATE + ' ₽ × ' + state.eve + ' ч × ' + state.qty;
+    } else {
+      sumDetail.textContent = state.price + ' ₽ × ' + state.qty;
+    }
     cta.textContent = '📅 Забронировать за ' + total + ' ₽';
     minus.disabled = state.qty <= 1;
     plus.disabled = state.qty >= 10;
+    eveMinus.disabled = state.eve <= 0;
+    evePlus.disabled = state.eve >= EVE_MAX;
   }
+  eveMinus.addEventListener('click', function(){ if (state.eve > 0) { state.eve--; recalc(); } });
+  evePlus.addEventListener('click', function(){ if (state.eve < EVE_MAX) { state.eve++; recalc(); } });
   tBtns.forEach(function(b){
     b.addEventListener('click', function(){
       tBtns.forEach(function(x){x.classList.remove('active')});
