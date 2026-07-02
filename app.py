@@ -567,7 +567,9 @@ if BOT_TOKEN:
             "2️⃣ Выберите тариф и количество мест\n"
             "3️⃣ Получите QR-код в чат\n"
             "4️⃣ Покажите его при сдаче вещей\n\n"
-            "Управление — *кнопками внизу* 👇"
+            "Управление — *кнопками внизу* 👇\n\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            "_Используя бот, вы соглашаетесь с обработкой персональных данных согласно Политике: /privacy_"
         )
         await message.answer(
             "Меню активировано ✓",
@@ -2252,6 +2254,57 @@ if BOT_TOKEN:
         )
         await message.answer(text, parse_mode="Markdown")
 
+    @dp.message(Command("mydata"))
+    async def cmd_mydata(message: types.Message):
+        """Право на доступ по 152-ФЗ: показываем клиенту его собственные данные."""
+        uid = message.from_user.id
+        uname = message.from_user.username
+        db = load_db()
+        my_bookings = [b for b in db.get("bookings", []) if b.get("telegram_user_id") == uid]
+        my_promos = [p for p in db.get("promo_codes", []) if p.get("user_id") == uid]
+
+        lines = [
+            "📋 *Ваши данные у нас*",
+            "━━━━━━━━━━━━━━",
+            "",
+            f"👤 *Telegram ID:* `{uid}`",
+        ]
+        if uname:
+            lines.append(f"🔗 *Username:* @{uname}")
+
+        if my_bookings:
+            last = my_bookings[-1]
+            phone = last.get("phone", "—")
+            name = last.get("name", "—")
+            created = last.get("created_at", "—")[:10]
+            lines.append("")
+            lines.append(f"📦 *Бронирований:* {len(my_bookings)}")
+            lines.append(f"👤 *Имя:* {name}")
+            lines.append(f"📞 *Телефон:* {phone}")
+            lines.append(f"📅 *Последняя бронь:* {created}")
+            active = [b for b in my_bookings if b.get("status") == "active"]
+            if active:
+                lines.append(f"🎫 *Активных броней:* {len(active)}")
+        else:
+            lines.append("")
+            lines.append("📦 *Бронирований:* 0 _(ещё не бронировали)_")
+
+        active_promo = [p for p in my_promos if not p.get("used")]
+        if active_promo:
+            lines.append(f"🎁 *Активных промокодов:* {len(active_promo)}")
+
+        lines.append("")
+        lines.append("━━━━━━━━━━━━━━")
+        lines.append("🔒 Данные храним только для оказания услуг.")
+        lines.append("Через 3 года после последней брони — удаляем автоматически.")
+        lines.append("")
+        lines.append("Хотите удалить данные сейчас? — /contact")
+        lines.append("")
+        lines.append("Полная политика: /privacy")
+
+        await message.answer("\n".join(lines), parse_mode="Markdown", disable_web_page_preview=True)
+
+
     @dp.message(Command("privacy"))
     async def cmd_privacy(message: types.Message):
         await message.answer(
@@ -3022,7 +3075,9 @@ if BOT_TOKEN:
         )
         if price_breakdown:
             text += f"\n💵 *Расчёт цены:*\n{price_breakdown}\n"
-        text += f"\n💳 *Итого: {total:,} ₽*\n\nВсё верно?"
+        text += f"\n💳 *Итого: {total:,} ₽*\n\n"
+        text += "📄 _Нажимая «Подтвердить», вы соглашаетесь с обработкой персональных данных согласно Политике: /privacy_\n\n"
+        text += "Всё верно?"
 
         kb = InlineKeyboardBuilder()
         kb.row(
@@ -3091,6 +3146,7 @@ if BOT_TOKEN:
             "review_requested": False,
             "promo_issued": False,
             "source": "bot_chat",
+            "privacy_accepted_at": now.isoformat(),
         }
 
         db = load_db()
@@ -3245,6 +3301,7 @@ async def set_bot_commands():
         BotCommand(command="contact", description="📞 Связаться с администрацией"),
         BotCommand(command="help", description="ℹ️ Помощь и список команд"),
         BotCommand(command="privacy", description="🔒 Политика конфиденциальности"),
+        BotCommand(command="mydata", description="📋 Мои персональные данные"),
     ]
     admin_commands = base_commands + [
         BotCommand(command="admin",      description="🔧 Админ-панель и сводка"),
